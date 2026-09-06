@@ -1,13 +1,13 @@
 {
   "name": "@proma/electron",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Proma，为专业用户设计的 Agent",
   "main": "dist/main.cjs",
   "author": {
     "name": "ErlichLiu",
     "email": "erlichliu@gmail.com"
   },
-  "repository": "github:youyouhdhd/Proma",
+  "repository": "github:youyouhdhd/Proma-Enhanced",
   "private": true,
   "type": "module",
   "scripts": {

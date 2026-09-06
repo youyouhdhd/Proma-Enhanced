@@ -2,7 +2,7 @@
 
 记录版本：0.1.6
 最后核对：2026-09-05
-适用对象：维护 `youyouhdhd/Proma` Fork 的开发者
+适用对象：维护 `youyouhdhd/Proma-Enhanced` Fork（官方上游 `proma-ai/Proma`）的开发者
 
 本文的目标是让维护者在 `proma-ai/Proma` 发布新版本后，能够先取得上游更新，再有边界地重放本 Fork 的定制功能。它记录当前仓库的真实分叉状态、定制提交和已知冲突区域；不把上游代码复制成第二份，也不建议直接在 `main` 上试错。
 
@@ -12,7 +12,7 @@
 
 | 名称 | 地址 | 用途 |
 | --- | --- | --- |
-| `origin` | `https://github.com/youyouhdhd/Proma.git` | 本 Fork，提交和发布目标 |
+| `origin` | `https://github.com/youyouhdhd/Proma-Enhanced.git` | 本 Fork，提交和发布目标 |
 | `upstream` | `https://github.com/proma-ai/Proma.git` | 官方上游，只用于获取最新代码 |
 
 本机已经配置了 `upstream` 远端。新克隆的副本需要手动执行：
