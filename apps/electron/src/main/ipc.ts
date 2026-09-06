@@ -191,10 +191,11 @@ import {
   getChannelById,
   getChannelPlanQuota,
 } from './lib/channel-manager'
-import { loginCodexOAuth, cancelCodexOAuthLogin, submitCodexOAuthCallbackUrl } from './lib/codex-oauth-service'
+import { codexOAuthSessionController } from './lib/codex-oauth-session-controller'
+import { mcpTunnelService } from './lib/mcp-server/tunnel-service'
 import { loginXaiOAuth, cancelXaiOAuthLogin } from './lib/xai-oauth-service'
 import { resolvePiReasoningCapability } from './lib/adapters/pi-model-registry'
-import { serializeCodexCredentials, serializeXaiCredentials } from '@proma/shared'
+import { serializeXaiCredentials } from '@proma/shared'
 import type { CodexOAuthDeviceCode, CodexOAuthLoginMethod, XaiOAuthDeviceCode } from '@proma/shared'
 import {
   listConversations,
@@ -1317,6 +1318,22 @@ async function withOAuthDeviceCodeQr<T extends CodexOAuthDeviceCode | XaiOAuthDe
 }
 
 export function registerIpcHandlers(): void {
+  // Codex OAuth 会话事件广播给所有窗口；渲染层只接受当前 sessionId 的事件，
+  // 旧会话的迟到事件会被自然丢弃（第二轮开发规范 §13）。
+  codexOAuthSessionController.onEvent((event) => {
+    if (event.type === 'device_code') {
+      void withOAuthDeviceCodeQr(event.deviceCode).then((payload) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send(CHANNEL_IPC_CHANNELS.CODEX_OAUTH_EVENT, { ...event, deviceCode: payload })
+        }
+      }).catch((error) => console.warn('[OAuth] 生成 Codex device code 二维码失败:', error))
+      return
+    }
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(CHANNEL_IPC_CHANNELS.CODEX_OAUTH_EVENT, event)
+    }
+  })
+
   // ===== 本地终端（仅主 renderer 可操作，不能指定可执行文件） =====
   const assertMainTerminalRenderer = (senderId: number): void => {
     const mainWindow = getMainWindow()
@@ -1727,63 +1744,35 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 发起 ChatGPT (Codex) OAuth 登录。登录在主进程执行（Pi SDK 用 Node crypto +
-  // 本地 :1455 回调服务）；成功后返回序列化的凭据 JSON（明文），由渲染层作为
-  // apiKey 传给 create/update，channel-manager 加密后存储——与现有 apiKey 明文回传模式一致。
+  // 发起 ChatGPT (Codex) OAuth 登录（会话状态机，第二轮优化）。
+  // start 立即返回 sessionId；auth_url / manual_input_ready / success 等作为
+  // CODEX_OAUTH_EVENT 事件推送。凭据不再经本 handler 返回——成功事件携带
+  // 序列化凭据 JSON（明文），渲染层作为 apiKey 传给 create/update，
+  // channel-manager 加密后存储——与现有 apiKey 明文回传模式一致。
   ipcMain.handle(
-    CHANNEL_IPC_CHANNELS.CODEX_OAUTH_LOGIN,
-    async (event, requestedMethod?: CodexOAuthLoginMethod): Promise<import('@proma/shared').CodexOAuthLoginResult> => {
-      const method: CodexOAuthLoginMethod = requestedMethod === 'device_code' ? 'device_code' : 'browser'
-      const sender = event.sender
-      const sendToSender = (channel: string, payload: unknown): void => {
-        if (!sender.isDestroyed()) sender.send(channel, payload)
-      }
-      try {
-        const credentials = await loginCodexOAuth({
-          method,
-          onAuthUrl: (url) => {
-            sendToSender(CHANNEL_IPC_CHANNELS.CODEX_OAUTH_AUTH_URL, { url })
-          },
-          onManualCodeRequested: (request) => {
-            sendToSender(CHANNEL_IPC_CHANNELS.CODEX_OAUTH_MANUAL_CODE_REQUESTED, request)
-          },
-          onDeviceCode: (deviceCode) => {
-            void withOAuthDeviceCodeQr(deviceCode).then((payload) => {
-              sendToSender(CHANNEL_IPC_CHANNELS.CODEX_OAUTH_DEVICE_CODE, payload)
-            }).catch((error) => console.warn('[OAuth] 发送 Codex device code 失败:', error))
-          },
-        })
-        return {
-          success: true,
-          credentials: serializeCodexCredentials(credentials),
-          ...(credentials.accountId ? { accountId: credentials.accountId } : {}),
-        }
-      } catch (error) {
-        return {
-          success: false,
-          message: error instanceof Error ? error.message : String(error),
-        }
-      }
+    CHANNEL_IPC_CHANNELS.CODEX_OAUTH_START,
+    async (_event, options?: { method?: CodexOAuthLoginMethod; autoOpenBrowser?: boolean }): Promise<import('@proma/shared').CodexOAuthStartResult> => {
+      return codexOAuthSessionController.start(options)
     }
   )
 
-  // 取消进行中的 ChatGPT OAuth 登录流程
+  // 取消进行中的 ChatGPT OAuth 登录会话（sessionId 不匹配时忽略）
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.CODEX_OAUTH_CANCEL,
-    async (): Promise<void> => {
-      cancelCodexOAuthLogin()
+    async (_, sessionId: string): Promise<void> => {
+      codexOAuthSessionController.cancel(sessionId)
     }
   )
 
-   // 渲染进程提交手动授权回调 URL（首次生效，重复提交忽略）
+   // 渲染进程提交手动授权回调 URL（resolve 当前会话，绝不重启登录；首次生效）
    ipcMain.handle(
      CHANNEL_IPC_CHANNELS.CODEX_OAUTH_SUBMIT_CALLBACK,
-     (_, callbackUrl: string): import('@proma/shared').CodexOAuthSubmitCallbackResult => {
-       if (typeof callbackUrl !== 'string' || callbackUrl.trim().length === 0) {
+     (_, sessionId: string, callbackUrl: string): import('@proma/shared').CodexOAuthSubmitCallbackResult => {
+       if (typeof sessionId !== 'string' || typeof callbackUrl !== 'string' || callbackUrl.trim().length === 0) {
          return { accepted: false }
        }
        // 不记录 callbackUrl（含 authorization code）
-       return submitCodexOAuthCallbackUrl(callbackUrl.trim())
+       return codexOAuthSessionController.submitCallback(sessionId, callbackUrl.trim())
      }
    )
 
@@ -1828,6 +1817,56 @@ export function registerIpcHandlers(): void {
     MCP_SERVER_IPC_CHANNELS.LIST_TOOLS,
     async (): Promise<import('@proma/shared').PromaMcpToolSummary[]> => {
       return promaMcpServerService.listTools()
+    }
+  )
+
+  // ===== OpenAI Secure MCP Tunnel（集成官方 tunnel-client） =====
+
+  // 获取 Tunnel 状态
+  ipcMain.handle(
+    MCP_SERVER_IPC_CHANNELS.GET_TUNNEL_STATE,
+    async (): Promise<import('@proma/shared').PromaMcpTunnelState> => {
+      return mcpTunnelService.getState()
+    }
+  )
+
+  // 启动安全连接（前置校验：本地 MCP 运行中 + Tunnel ID + Runtime Key）
+  ipcMain.handle(
+    MCP_SERVER_IPC_CHANNELS.START_TUNNEL,
+    async (): Promise<import('@proma/shared').PromaMcpTunnelState> => {
+      return mcpTunnelService.start()
+    }
+  )
+
+  // 停止安全连接
+  ipcMain.handle(
+    MCP_SERVER_IPC_CHANNELS.STOP_TUNNEL,
+    async (): Promise<import('@proma/shared').PromaMcpTunnelState> => {
+      return mcpTunnelService.stop()
+    }
+  )
+
+  // 保存 Runtime API Key（safeStorage 加密落盘；明文不返回、不记录）
+  ipcMain.handle(
+    MCP_SERVER_IPC_CHANNELS.SAVE_TUNNEL_RUNTIME_KEY,
+    async (_, runtimeKey: string): Promise<{ success: boolean; message?: string }> => {
+      try {
+        if (typeof runtimeKey !== 'string' || runtimeKey.trim().length === 0) {
+          return { success: false, message: 'Runtime API Key 不能为空' }
+        }
+        mcpTunnelService.saveRuntimeKey(runtimeKey)
+        return { success: true }
+      } catch (error) {
+        return { success: false, message: error instanceof Error ? error.message : String(error) }
+      }
+    }
+  )
+
+  // 运行 tunnel-client doctor 诊断
+  ipcMain.handle(
+    MCP_SERVER_IPC_CHANNELS.RUN_TUNNEL_DOCTOR,
+    async (): Promise<{ ok: boolean; output: string }> => {
+      return mcpTunnelService.doctor()
     }
   )
 

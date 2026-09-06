@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   Select,
   SelectContent,
@@ -54,6 +55,7 @@ import type {
   ChannelTestResult,
   AgentThinkingLevel,
   CodexOAuthDeviceCode,
+  CodexOAuthStatus,
   FetchModelsResult,
   ProviderType,
   XaiOAuthDeviceCode,
@@ -90,6 +92,16 @@ import {
   SettingsSelect,
   SettingsToggle,
 } from './primitives'
+
+/** Codex OAuth 登录对话框的本地渲染状态（会话快照的渲染层投影） */
+interface CodexOAuthDialogState {
+  status: CodexOAuthStatus
+  method: 'browser' | 'device_code'
+  authUrl: string | null
+  manualInputReady: boolean
+  deviceCode: CodexOAuthDeviceCode | null
+  message: string | null
+}
 
 interface ChannelFormProps {
   /** 编辑模式下传入已有渠道，创建模式传 null */
@@ -273,38 +285,53 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
   const [showExitDialog, setShowExitDialog] = React.useState(false)
   const [showBaseUrlRiskDialog, setShowBaseUrlRiskDialog] = React.useState(false)
   const [pendingRiskAction, setPendingRiskAction] = React.useState<'auto-save' | 'create' | 'fetch' | 'save-and-close' | 'test' | null>(null)
-  const [codexLoggingIn, setCodexLoggingIn] = React.useState(false)
-  const [codexDeviceCode, setCodexDeviceCode] = React.useState<CodexOAuthDeviceCode | null>(null)
-  /** Codex OAuth 授权 URL（Pi notify auth_url 事件推送） */
-  const [codexAuthUrl, setCodexAuthUrl] = React.useState<string | null>(null)
-  /** Pi 已进入 manual_code 等待：允许粘贴回调 URL */
-  const [codexManualRequested, setCodexManualRequested] = React.useState(false)
+  /**
+   * Codex OAuth 会话状态机（第二轮）：null = 无会话。对话框在 startCodexOAuth
+   * 点击瞬间打开（规范 §5：先开窗、显示"正在生成授权链接…"），后续状态全部由
+   * 主进程会话事件驱动；不再 await 整个登录流程。
+   */
+  const [codexSession, setCodexSession] = React.useState<CodexOAuthDialogState | null>(null)
   const [codexCallbackInput, setCodexCallbackInput] = React.useState('')
   const [xaiLoggingIn, setXaiLoggingIn] = React.useState(false)
   const [xaiDeviceCode, setXaiDeviceCode] = React.useState<XaiOAuthDeviceCode | null>(null)
 
   const setChannelFormDirty = useSetAtom(channelFormDirtyAtom)
-  const codexLoggingInRef = React.useRef(false)
+  const codexSessionIdRef = React.useRef<string | null>(null)
+  /** true = 用户主动取消；success 自动关闭时必须为 false，避免 onOpenChange 误触发 cancel（规范 §11） */
+  const codexAutoCloseRef = React.useRef(false)
+  /** 会话存活标记：点击瞬间同步置位，防双击创建并发会话 */
+  const codexActiveRef = React.useRef(false)
+  /** 始终指向最新 success 处理器（事件订阅闭包保持新鲜） */
+  const codexSuccessHandlerRef = React.useRef<(credentials: string) => void>(() => {})
   const xaiLoggingInRef = React.useRef(false)
-
-  React.useEffect(() => {
-    codexLoggingInRef.current = codexLoggingIn
-  }, [codexLoggingIn])
 
   React.useEffect(() => {
     xaiLoggingInRef.current = xaiLoggingIn
   }, [xaiLoggingIn])
 
   React.useEffect(() => {
-    return window.electronAPI.onCodexOAuthDeviceCode(setCodexDeviceCode)
-  }, [])
-
-  React.useEffect(() => {
-    return window.electronAPI.onCodexOAuthAuthUrl((payload) => setCodexAuthUrl(payload.url))
-  }, [])
-
-  React.useEffect(() => {
-    return window.electronAPI.onCodexOAuthManualCodeRequested(() => setCodexManualRequested(true))
+    // 只接受当前 sessionId 的事件；旧会话的迟到事件全部丢弃（规范 §13）
+    return window.electronAPI.onCodexOAuthSessionEvent((event) => {
+      if (event.sessionId !== codexSessionIdRef.current) return
+      if (event.type === 'auth_url') {
+        setCodexSession((s) => (s ? { ...s, status: 'waiting_authorization', authUrl: event.url } : s))
+      } else if (event.type === 'manual_input_ready') {
+        setCodexSession((s) => (s ? { ...s, status: 'waiting_authorization', manualInputReady: true } : s))
+      } else if (event.type === 'device_code') {
+        setCodexSession((s) => (s ? { ...s, status: 'waiting_authorization', deviceCode: event.deviceCode } : s))
+      } else if (event.type === 'progress') {
+        setCodexSession((s) => (s ? { ...s, message: event.message } : s))
+      } else if (event.type === 'success') {
+        void codexSuccessHandlerRef.current(event.credentials)
+      } else if (event.type === 'error') {
+        // 终态：保留错误展示，但会话已结束（可重试、关闭不触发 cancel）
+        codexActiveRef.current = false
+        codexSessionIdRef.current = null
+        setCodexSession((s) => (s ? { ...s, status: 'error', message: event.message } : s))
+      } else if (event.type === 'status' && event.status === 'cancelled') {
+        resetCodexSession()
+      }
+    })
   }, [])
 
   React.useEffect(() => {
@@ -312,8 +339,9 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
   }, [])
 
   // 关闭或放弃表单时取消仍在轮询的 device-code 授权，避免后台孤立请求。
+  // 关闭或放弃表单时取消仍在进行的登录会话，避免后台孤立请求。
   React.useEffect(() => () => {
-    if (codexLoggingInRef.current) void window.electronAPI.codexOAuthCancel()
+    if (codexActiveRef.current && codexSessionIdRef.current) void window.electronAPI.codexOAuthCancel(codexSessionIdRef.current)
     if (xaiLoggingInRef.current) void window.electronAPI.xaiOAuthCancel()
   }, [])
 
@@ -611,20 +639,76 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
     )))
   }
 
-  const handleCancelCodexLogin = (): void => {
-    codexLoggingInRef.current = false
-    void window.electronAPI.codexOAuthCancel()
-    setCodexDeviceCode(null)
-    setCodexAuthUrl(null)
-    setCodexManualRequested(false)
+
+  /** 重置本地会话状态（对话框关闭 / 终态清理）。 */
+  const resetCodexSession = (): void => {
+    codexActiveRef.current = false
+    codexAutoCloseRef.current = false
+    codexSessionIdRef.current = null
+    setCodexSession(null)
     setCodexCallbackInput('')
   }
 
-  /** 复制授权链接（用户在任意浏览器 / 设备打开均可） */
+  /** Dialog 关闭路由：success 自动关闭 → 绝不 cancel；其余关闭一律视为用户取消（规范 §11）。 */
+  const handleCodexDialogOpenChange = (open: boolean): void => {
+    if (open) return
+    if (codexAutoCloseRef.current) {
+      resetCodexSession()
+      return
+    }
+    cancelCodexSession()
+  }
+
+  /** 用户主动取消：终止 OAuth 会话（主进程正确收尾回调服务器）并关闭对话框。 */
+  const cancelCodexSession = (): void => {
+    const sessionId = codexSessionIdRef.current
+    if (sessionId && codexActiveRef.current) void window.electronAPI.codexOAuthCancel(sessionId)
+    resetCodexSession()
+  }
+
+  /**
+   * 用户点击「登录」——OAuth 唯一合法的启动入口（规范 §12：绝不从 useEffect 启动）。
+   * 点击瞬间先打开对话框（显示"正在生成授权链接…"），再调用 start；
+   * 主进程立即返回 sessionId，后续状态全部由会话事件驱动。
+   */
+  const startCodexOAuth = (method: 'browser' | 'device_code'): void => {
+    if (codexActiveRef.current) return // 双击防护：绝不创建第二个并发会话（规范 §15）
+    codexActiveRef.current = true
+    codexAutoCloseRef.current = false
+    setTestResult(null)
+    setCodexCallbackInput('')
+    setCodexSession({ status: 'starting', method, authUrl: null, manualInputReady: false, deviceCode: null, message: null })
+    void window.electronAPI.codexOAuthStart({ method, autoOpenBrowser: true }).then((result) => {
+      if (!result.sessionId || !result.snapshot) {
+        toast.error(result.error ?? '启动登录失败，请重试')
+        resetCodexSession()
+        return
+      }
+      if (result.reused) {
+        // 已有进行中的会话：复用同一 sessionId，绝不重启 OAuth（规范 §49）
+        toast.info('已有进行中的登录会话，已为你恢复')
+      }
+      codexSessionIdRef.current = result.sessionId
+      setCodexSession({
+        status: result.snapshot.status,
+        method,
+        authUrl: result.snapshot.authUrl ?? null,
+        manualInputReady: result.snapshot.manualInputReady,
+        deviceCode: null,
+        message: null,
+      })
+    }).catch((error) => {
+      console.error('[模型配置表单] 启动 ChatGPT 登录失败:', error)
+      toast.error('启动登录失败，请重试')
+      resetCodexSession()
+    })
+  }
+
+  /** 复制授权链接（用户在任意浏览器 / 设备打开均可；不改变会话状态）。 */
   const handleCopyCodexAuthUrl = async (): Promise<void> => {
-    if (!codexAuthUrl) return
+    if (!codexSession?.authUrl) return
     try {
-      await copyTextToClipboard(codexAuthUrl)
+      await copyTextToClipboard(codexSession.authUrl)
       toast.success('授权链接已复制')
     } catch {
       toast.error('复制失败，请手动选择链接复制')
@@ -632,16 +716,22 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
   }
 
   /**
-   * 提交手动回调 URL。只做非空校验；code 提取、state 校验与 token 交换
-   * 全部由 Pi 完成。URL 含授权码，绝不记录到日志。
+   * 提交手动回调 URL：只 resolve 当前会话的等待，绝不重启登录。
+   * code 提取、state 校验与 token 交换全部由 Pi 在原 OAuth 流程内完成。
+   * URL 含授权码，绝不记录到日志。
    */
   const handleCodexSubmitCallback = (): void => {
+    const sessionId = codexSessionIdRef.current
     const trimmed = codexCallbackInput.trim()
     if (!trimmed) {
       toast.error('请粘贴授权完成后的回调地址')
       return
     }
-    void window.electronAPI.codexOauthSubmitCallback(trimmed).then((result) => {
+    if (!sessionId) {
+      toast.error('当前没有进行中的登录会话')
+      return
+    }
+    void window.electronAPI.codexOauthSubmitCallback(sessionId, trimmed).then((result) => {
       if (result.accepted) {
         setCodexCallbackInput('')
         toast.success('回调已提交，正在完成登录…')
@@ -654,28 +744,21 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
     })
   }
 
-  /** 发起 ChatGPT (Codex) OAuth 登录，默认系统浏览器；网络受限时可改用设备码。 */
-  const handleCodexLogin = async (method: 'browser' | 'device_code' = 'browser'): Promise<void> => {
-    codexLoggingInRef.current = true
-    setCodexLoggingIn(true)
-    setCodexDeviceCode(null)
-    setCodexAuthUrl(null)
-    setCodexManualRequested(false)
-    setCodexCallbackInput('')
-    setTestResult(null)
+  /**
+   * OAuth success 事件的落地处理：保存凭据 + 拉取模型 + 自动落库。
+   * 结束后程序主动关闭对话框，autoClose 守卫保证 onOpenChange 不触发 cancel。
+   */
+  const handleCodexLoginSuccess = async (credentials: string): Promise<void> => {
     try {
-      const result = await window.electronAPI.codexOAuthLogin(method)
-      if (!result.success || !result.credentials) {
-        toast.error(result.message ?? 'ChatGPT 登录失败，请重试')
-        return
+      if (codexSessionIdRef.current) {
+        codexSessionIdRef.current = null
+        codexActiveRef.current = false
       }
-      const credentials = result.credentials
+      setCodexSession((s) => (s ? { ...s, status: 'success', message: null } : s))
       // 凭据 JSON 已含 accountId，写入 apiKey 后由 codexCredentials 派生展示，无需单独 state。
       setApiKey(credentials)
 
       // codex 模型是 Pi SDK 内置目录、不依赖凭据/baseUrl。登录后自动拉取并全部启用。
-      // 不复用 handleFetchModels：其 gate 读派生自 apiKey state 的 hasRequiredSecret，
-      // 而 setApiKey 是异步的，同一 tick 内仍是旧值，这里直接内联拉取。
       let codexModels: ChannelModel[] = []
       try {
         const modelsResult = await window.electronAPI.fetchModels({ provider, baseUrl, apiKey: credentials })
@@ -690,7 +773,6 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
 
       // OAuth 流程中用户很容易在浏览器授权后直接关闭表单，来不及点「创建」而丢失凭据。
       // 登录成功即明确的保存意图：创建模式下自动落库（编辑模式由 effectiveApiKey 变化触发 auto-save）。
-      // 用刚拿到的凭据/模型直接构造入参，避免依赖 setState 后同一 tick 仍是旧值的闭包。
       if (isEdit) {
         toast.success('ChatGPT 登录成功')
       } else {
@@ -710,10 +792,15 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
       console.error('[模型配置表单] ChatGPT 登录失败:', error)
       toast.error('ChatGPT 登录失败，请重试')
     } finally {
-      codexLoggingInRef.current = false
-      setCodexLoggingIn(false)
+      codexAutoCloseRef.current = true
+      resetCodexSession()
     }
   }
+
+  React.useEffect(() => {
+    // success 事件从固定订阅闭包里调用，这里让 ref 始终指向最新的表单上下文。
+    codexSuccessHandlerRef.current = (credentials) => { void handleCodexLoginSuccess(credentials) }
+  })
 
   const handleCancelXaiLogin = (): void => {
     xaiLoggingInRef.current = false
@@ -1118,67 +1205,111 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
                   variant="outline"
                   size="sm"
                   type="button"
-                  onClick={() => void handleCodexLogin('browser')}
-                  disabled={codexLoggingIn}
+                  onClick={() => startCodexOAuth('browser')}
+                  disabled={codexSession !== null}
                   className="w-full"
                 >
-                  {codexLoggingIn ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
-                  <span>{codexLoggingIn ? '等待授权完成…' : hasRequiredSecret ? '重新登录 ChatGPT' : '用 ChatGPT 登录'}</span>
+                  <Zap size={14} />
+                  <span>{hasRequiredSecret ? '重新登录 ChatGPT' : '用 ChatGPT 登录'}</span>
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
                   type="button"
-                  onClick={() => void handleCodexLogin('device_code')}
-                  disabled={codexLoggingIn}
+                  onClick={() => startCodexOAuth('device_code')}
+                  disabled={codexSession !== null}
                   className="w-full text-muted-foreground"
                 >
                   使用设备码登录（浏览器无法使用系统代理时）
                 </Button>
-                {codexLoggingIn && (
-                  <Button variant="ghost" size="sm" type="button" onClick={handleCancelCodexLogin} className="w-full text-muted-foreground">
-                    取消登录
-                  </Button>
-                )}
-                {codexDeviceCode && (
-                  <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-2">
-                    <div>在任意可访问网络的浏览器中打开链接，并输入设备码：<span className="font-mono font-medium text-foreground">{codexDeviceCode.userCode}</span></div>
-                    <a href={codexDeviceCode.verificationUri} target="_blank" rel="noreferrer" className="text-primary hover:underline">打开 ChatGPT 授权页面</a>
-                    {codexDeviceCode.qrCodeData && <img src={codexDeviceCode.qrCodeData} alt="ChatGPT 设备码授权二维码" className="h-28 w-28 rounded bg-white p-1" />}
-                  </div>
-                )}
-                {codexLoggingIn && codexAuthUrl && (
-                  <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2.5 text-xs space-y-2">
-                    <div className="font-medium text-foreground">登录 ChatGPT / Codex</div>
-                    <div className="text-muted-foreground">1. 打开或复制下面的授权链接，在任意浏览器完成登录：</div>
-                    <div className="max-h-16 overflow-y-auto break-all rounded bg-muted/60 px-2 py-1.5 font-mono text-[11px] text-foreground/80 select-all">{codexAuthUrl}</div>
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" type="button" className="h-7 flex-1" onClick={() => void handleCopyCodexAuthUrl()}>复制链接</Button>
-                      <Button variant="outline" size="sm" type="button" className="h-7 flex-1" onClick={() => void window.electronAPI.openExternal(codexAuthUrl)}>打开浏览器</Button>
-                    </div>
-                    <div className="text-muted-foreground">{codexManualRequested ? '等待授权… 自动回调与手动粘贴哪个先完成即用哪个。' : '正在生成授权链接…'}</div>
-                    <div className="border-t border-border/60 pt-2 space-y-1.5">
-                      <div className="text-muted-foreground">如果浏览器无法自动返回 Proma（如远程 / 沙盒浏览器），请复制浏览器地址栏中以 <span className="font-mono">http://localhost:1455/auth/callback</span> 开头的完整地址粘贴到这里；页面打不开也没关系，地址栏里有授权码即可。</div>
-                      <input
-                        type="text"
-                        value={codexCallbackInput}
-                        onChange={(e) => setCodexCallbackInput(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleCodexSubmitCallback() }}
-                        placeholder={codexManualRequested ? 'http://localhost:1455/auth/callback?code=…&state=…' : '等待授权请求…'}
-                        disabled={!codexManualRequested}
-                        className="w-full rounded bg-muted/60 px-2 py-1.5 font-mono text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
-                        autoComplete="off"
-                      />
-                      <Button variant="secondary" size="sm" type="button" className="w-full" disabled={!codexManualRequested || !codexCallbackInput.trim()} onClick={handleCodexSubmitCallback}>完成登录</Button>
-                    </div>
-                  </div>
-                )}
+                {codexSession && <div className="text-xs text-muted-foreground">登录进行中… 请在弹出的授权窗口完成操作。</div>}
                 {hasRequiredSecret ? (
                   <div className="flex items-center gap-1.5 text-xs text-emerald-600">
                     <CheckCircle2 size={12} className="shrink-0" />
                     <span>已登录 ChatGPT 订阅{codexCredentials?.accountId ? `（账号 ${codexCredentials.accountId.slice(0, 8)}…）` : ''}</span>
                   </div>
                 ) : <div className="text-xs text-muted-foreground">Proma 会代理 token 请求；系统浏览器授权页仍需使用可访问 OpenAI 的网络。可改用设备码并在另一台设备完成授权。</div>}
+                {/* Codex OAuth 登录对话框：点击「登录」立即打开（规范 §5），状态由会话事件驱动。
+                    onOpenChange 区分用户取消与 success 自动关闭，避免 cancel 竞态（规范 §11）。 */}
+                <Dialog open={codexSession !== null} onOpenChange={handleCodexDialogOpenChange}>
+                  <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>登录 ChatGPT / Codex</DialogTitle>
+                      <DialogDescription>在浏览器中登录 OpenAI 并授权 PROMA。正常情况下授权完成后 PROMA 会自动完成登录。</DialogDescription>
+                    </DialogHeader>
+                    {codexSession?.status === 'starting' && (
+                      <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                        <Loader2 size={14} className="animate-spin" />
+                        <span>正在生成授权链接…</span>
+                      </div>
+                    )}
+                    {(codexSession?.status === 'waiting_authorization' || codexSession?.status === 'exchanging_token') && (
+                      <div className="space-y-3">
+                        {codexSession.deviceCode ? (
+                          <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-2">
+                            <div>在任意可访问网络的浏览器中打开链接，并输入设备码：<span className="font-mono font-medium text-foreground">{codexSession.deviceCode.userCode}</span></div>
+                            <a href={codexSession.deviceCode.verificationUri} target="_blank" rel="noreferrer" className="text-primary hover:underline">打开 ChatGPT 授权页面</a>
+                            {codexSession.deviceCode.qrCodeData && <img src={codexSession.deviceCode.qrCodeData} alt="ChatGPT 设备码授权二维码" className="h-28 w-28 rounded bg-white p-1" />}
+                          </div>
+                        ) : codexSession.authUrl ? (
+                          <div className="space-y-2">
+                            <div className="text-xs text-muted-foreground">步骤 1 / 2：打开或复制下面的授权链接，在任意浏览器完成登录。</div>
+                            <div className="max-h-20 overflow-y-auto break-all rounded bg-muted/60 px-2 py-1.5 font-mono text-[11px] text-foreground/80 select-all">{codexSession.authUrl}</div>
+                            <div className="flex gap-2">
+                              <Button variant="outline" size="sm" type="button" className="h-7 flex-1" onClick={() => void handleCopyCodexAuthUrl()}>复制链接</Button>
+                              <Button variant="outline" size="sm" type="button" className="h-7 flex-1" onClick={() => void window.electronAPI.openExternal(codexSession.authUrl ?? '')}>在浏览器中打开</Button>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <Loader2 size={12} className="animate-spin" />
+                              <span>{codexSession.status === 'exchanging_token' ? '正在完成登录…' : '等待浏览器完成授权'}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                            <Loader2 size={14} className="animate-spin" />
+                            <span>正在生成授权链接…</span>
+                          </div>
+                        )}
+                        <div className="border-t border-border/60 pt-3 space-y-1.5">
+                          <div className="text-[11px] leading-relaxed text-muted-foreground">
+                            如果浏览器无法访问 localhost，请复制浏览器地址栏中以 <span className="font-mono">http://localhost:1455/auth/callback</span> 开头的完整网址粘贴到这里；页面打不开也没关系，地址栏里有授权码即可。
+                          </div>
+                          <input
+                            type="text"
+                            value={codexCallbackInput}
+                            onChange={(e) => setCodexCallbackInput(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleCodexSubmitCallback() }}
+                            placeholder={codexSession.manualInputReady ? 'http://localhost:1455/auth/callback?code=…&state=…' : '等待授权请求…'}
+                            disabled={!codexSession.manualInputReady}
+                            className="w-full rounded bg-muted/60 px-2 py-1.5 font-mono text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+                            autoComplete="off"
+                          />
+                          <Button variant="secondary" size="sm" type="button" className="w-full" disabled={!codexSession.manualInputReady || !codexCallbackInput.trim()} onClick={handleCodexSubmitCallback}>完成登录</Button>
+                        </div>
+                      </div>
+                    )}
+                    {codexSession?.status === 'error' && (
+                      <div className="space-y-3">
+                        <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive break-all">{codexSession.message ?? '登录失败，请重试'}</div>
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm" type="button" className="flex-1" onClick={() => { resetCodexSession(); startCodexOAuth(codexSession.method) }}>重试</Button>
+                          <Button variant="ghost" size="sm" type="button" className="flex-1" onClick={resetCodexSession}>关闭</Button>
+                        </div>
+                      </div>
+                    )}
+                    {codexSession?.status === 'success' && (
+                      <div className="flex items-center gap-2 py-4 text-sm text-emerald-600">
+                        <CheckCircle2 size={14} />
+                        <span>登录成功，正在保存凭据…</span>
+                      </div>
+                    )}
+                    <DialogFooter>
+                      {codexSession && !['error', 'success'].includes(codexSession.status) && (
+                        <Button variant="ghost" size="sm" type="button" onClick={cancelCodexSession}>取消</Button>
+                      )}
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
               </div>
             ) : isXaiProvider ? (
               <div className="space-y-2">

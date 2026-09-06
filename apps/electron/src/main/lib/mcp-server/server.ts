@@ -1,10 +1,11 @@
 /**
  * PromaMcpServer — 面向 ChatGPT Web 等外部 MCP Client 的本地能力服务器
+ * （第二轮：一个 MCP Gateway 管理多个 Workspace）
  *
  * - Streamable HTTP（POST /mcp 初始化与会话内调用；GET/DELETE 管理 SSE 与关闭）；
- * - 默认仅监听 127.0.0.1；
- * - 会话按 Mcp-Session-Id 管理，空闲 30 分钟回收，应用退出全部关闭；
- * - 工具经 McpToolAdapter 从 LocalToolRegistry 过滤暴露；
+ * - endpoint 路由：/mcp = 全部已启用 Workspace；/mcp/<profileId> = Connection Profile 子集；
+ * - 默认仅监听 127.0.0.1；会话按 Mcp-Session-Id 管理，空闲 30 分钟回收；
+ * - 工具经 McpToolAdapter 过滤暴露；每次调用显式解析 workspace（无全局 activeWorkspace）；
  * - 工具执行不触碰 Pi / Codex / 任何模型调用（架构隔离硬约束）。
  */
 
@@ -14,23 +15,30 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { normalizePromaMcpServerConfig } from './config'
-import { selectVisibleTools } from './tool-adapter'
+import { buildMcpToolViews } from './tool-adapter'
 import { SessionManager } from './session-manager'
 import { isRequestAuthorized } from './auth'
+import {
+  resolveTargetWorkspace,
+  assertToolPermission,
+  handleWorkspaceList,
+  handleReadMany,
+  handleGitStatusBatch,
+  handleCrossWorkspaceSearch,
+  type WorkspaceDirectoryEntry,
+  type WorkspaceContextResolver,
+} from './multi-workspace'
 import type { PromaMcpServerConfig, PromaMcpServerStatus } from '@proma/shared'
-import type { LocalToolRegistry, LocalToolContext } from '../local-tools'
+import type { LocalToolRegistry, LocalToolContext, LocalToolResult } from '../local-tools'
 
 const IDLE_TTL_MS = 30 * 60 * 1000
 
-export interface PromaMcpServerWorkspace {
-  workspaceId: string
-  rootPath: string
-}
-
 interface StartInput {
   config: PromaMcpServerConfig
-  /** 解析当前生效的 workspace（id + 绝对根路径）；无法解析时抛错 */
-  resolveWorkspace(): PromaMcpServerWorkspace
+  /** 启动时列出全部已注册 Workspace（含未启用，供状态展示） */
+  listWorkspaces(): WorkspaceDirectoryEntry[]
+  /** 调用时解析某个 Workspace 的执行上下文（rootPath 每次调用时重新验证） */
+  resolveWorkspaceContext(entryId: string): { context: LocalToolContext; entry: WorkspaceDirectoryEntry } | { error: string }
   registry: LocalToolRegistry
 }
 
@@ -38,7 +46,8 @@ export class PromaMcpServer {
   private httpServer: ReturnType<typeof createServer> | null = null
   private readonly sessions = new SessionManager()
   private config: PromaMcpServerConfig | null = null
-  private workspace: PromaMcpServerWorkspace | null = null
+  private listWorkspaces: (() => WorkspaceDirectoryEntry[]) | null = null
+  private resolveWorkspaceContext: StartInput['resolveWorkspaceContext'] | null = null
   private registry: LocalToolRegistry | null = null
   private lastError: string | undefined
 
@@ -49,9 +58,9 @@ export class PromaMcpServer {
   async start(input: StartInput): Promise<PromaMcpServerStatus> {
     await this.stop()
     const config = normalizePromaMcpServerConfig(input.config)
-    const workspace = input.resolveWorkspace()
     this.config = config
-    this.workspace = workspace
+    this.listWorkspaces = input.listWorkspaces
+    this.resolveWorkspaceContext = input.resolveWorkspaceContext
     this.registry = input.registry
 
     const host = config.host
@@ -71,7 +80,7 @@ export class PromaMcpServer {
 
     const address = httpServer.address()
     const port = typeof address === 'object' && address ? address.port : requestedPort
-    this.sessions.startIdleSweep((sessionId) => { void this.closeSession(sessionId) })
+    this.sessions.startIdleSweep((sessionId) => { void this.closeSession(sessionId) }, IDLE_TTL_MS)
     return this.getStatus(port)
   }
 
@@ -88,13 +97,26 @@ export class PromaMcpServer {
     const server = this.httpServer
     const address = server?.address()
     const port = portOverride ?? (typeof address === 'object' && address ? address.port : (this.config?.port === 'auto' ? 0 : this.config?.port ?? 0))
+    const host = this.config?.host ?? '127.0.0.1'
+    const entries = this.listWorkspaces?.() ?? []
+    const summaries = entries.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      enabled: entry.enabled,
+      available: entry.enabled,
+      permissions: entry.permissions,
+    }))
+    const profileEndpoints = (this.config?.profiles ?? [])
+      .filter((profile) => profile.enabled && server !== null)
+      .map((profile) => ({ id: profile.id, name: profile.name, endpoint: 'http://' + host + ':' + port + '/mcp/' + profile.id }))
     return {
       running: server !== null,
-      host: this.config?.host ?? '127.0.0.1',
+      host,
       port,
-      endpoint: server !== null ? `http://${this.config?.host ?? '127.0.0.1'}:${port}/mcp` : '',
+      endpoint: server !== null ? 'http://' + host + ':' + port + '/mcp' : '',
       activeSessions: this.sessions.size,
-      ...(this.workspace ? { workspaceId: this.workspace.workspaceId } : {}),
+      workspaces: summaries,
+      profileEndpoints,
       ...(this.lastError ? { errorMessage: this.lastError } : {}),
     }
   }
@@ -104,6 +126,27 @@ export class PromaMcpServer {
     if (!entry) return
     this.sessions.delete(sessionId)
     try { await entry.transport.close() } catch { /* 已关闭 */ }
+  }
+
+  /** 解析 endpoint 作用域：/mcp = 全部；/mcp/<profileId> = Profile 子集。未知 Profile 返回 undefined。 */
+  private resolveEndpointScope(url: string): { profileId?: string; ok: boolean } {
+    const path = url.split('?')[0] ?? ''
+    if (path === '/mcp' || path === '/mcp/') return { ok: true }
+    const match = /^[/]mcp[/]([^/]+)$/.exec(path)
+    if (!match) return { ok: false }
+    const profileId = decodeURIComponent(match[1]!)
+    const profile = this.config?.profiles.find((p) => p.id === profileId && p.enabled)
+    if (!profile) return { ok: false }
+    return { profileId: profile.id, ok: true }
+  }
+
+  /** Profile 作用域下的可见 Workspace（/mcp 全部启用；profile 取交集） */
+  private scopedEntries(profileId?: string): WorkspaceDirectoryEntry[] {
+    const all = (this.listWorkspaces?.() ?? []).filter((e) => e.enabled)
+    if (!profileId) return all
+    const profile = this.config?.profiles.find((p) => p.id === profileId && p.enabled)
+    if (!profile) return []
+    return all.filter((entry) => profile.workspaceIds.includes(entry.id))
   }
 
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -120,7 +163,8 @@ export class PromaMcpServer {
       return
     }
 
-    if (!url.startsWith('/mcp')) {
+    const scope = this.resolveEndpointScope(url)
+    if (!scope.ok) {
       res.writeHead(404).end()
       return
     }
@@ -147,7 +191,7 @@ export class PromaMcpServer {
     const sessionId = typeof sessionHeader === 'string' ? sessionHeader : undefined
 
     if (req.method === 'POST' && !sessionId) {
-      await this.handleInitialize(req, res)
+      await this.handleInitialize(req, res, scope.profileId)
       return
     }
 
@@ -162,31 +206,38 @@ export class PromaMcpServer {
     await entry.transport.handleRequest(req, res, body)
   }
 
-  /** 首次 POST（initialize）：为该客户端创建独立 transport + MCP Server 实例 */
-  private async handleInitialize(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  /** 首次 POST（initialize）：为该客户端创建独立 transport + MCP Server 实例，绑定 endpoint 作用域 */
+  private async handleInitialize(req: IncomingMessage, res: ServerResponse, profileId?: string): Promise<void> {
     const body = await readJsonBody(req)
-    if (!this.registry || !this.config || !this.workspace) {
+    if (!this.registry || !this.config || !this.resolveWorkspaceContext) {
       res.writeHead(503).end()
       return
     }
     const registry = this.registry
-    const config = this.config
-    const workspace = this.workspace
-
+    const resolveWorkspaceContext = this.resolveWorkspaceContext
     const server = new Server(
-      { name: 'Proma MCP', version: '1.0.0' },
+      { name: 'Proma MCP', version: '2.0.0' },
       { capabilities: { tools: {} } },
     )
 
-    server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: selectVisibleTools(config, registry).map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })),
-    }))
+    server.setRequestHandler(ListToolsRequestSchema, () => {
+      const config = this.config
+      const registryNow = this.registry
+      if (!config || !registryNow) return { tools: [] }
+      return {
+        tools: buildMcpToolViews(config, registryNow).map((view) => ({
+          name: view.name,
+          description: view.description,
+          inputSchema: view.inputSchema,
+          annotations: view.annotations,
+        })),
+      }
+    })
 
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const name = request.params.name
       const args = (request.params.arguments ?? {}) as Record<string, unknown>
-      const context: LocalToolContext = { workspaceId: workspace.workspaceId, rootPath: workspace.rootPath }
-      const result = await registry.execute(name, args, context)
+      const result = await this.dispatchToolCall(name, args, profileId, resolveWorkspaceContext, registry)
       const text = result.text ?? JSON.stringify(result.ok ? (result.data ?? {}) : (result.error ?? { ok: false }))
       return {
         content: [{ type: 'text', text }],
@@ -198,7 +249,7 @@ export class PromaMcpServer {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sessionId: string) => {
-        this.sessions.set(sessionId, { transport, server, createdAt: Date.now(), lastUsedAt: Date.now() })
+        this.sessions.set(sessionId, { transport, server, createdAt: Date.now(), lastUsedAt: Date.now(), profileId })
       },
       onsessionclosed: (sessionId: string) => {
         this.sessions.delete(sessionId)
@@ -206,6 +257,46 @@ export class PromaMcpServer {
     })
     await server.connect(transport)
     await transport.handleRequest(req, res, body)
+  }
+
+  /** 统一工具分发：多工作区固定工具 + 单工作区工具（显式解析 workspace、按仓库权限放行） */
+  private async dispatchToolCall(
+    name: string,
+    args: Record<string, unknown>,
+    profileId: string | undefined,
+    resolveContext: StartInput['resolveWorkspaceContext'],
+    registry: LocalToolRegistry,
+  ): Promise<LocalToolResult> {
+    const entries = this.scopedEntries(profileId)
+    const scopedResolver: WorkspaceContextResolver = (entryId: string) => {
+      if (!entries.some((e) => e.id === entryId)) return { error: 'workspace 不在当前 endpoint 的授权范围内' }
+      return resolveContext(entryId)
+    }
+
+    if (name === 'workspace_list') return handleWorkspaceList(entries)
+    if (name === 'read_many') return handleReadMany(args, entries, scopedResolver, registry)
+    if (name === 'git_status_batch') return handleGitStatusBatch(args, entries, scopedResolver, registry)
+    if (name === 'search_text' && Array.isArray(args.workspace_ids) && args.workspace_ids.length > 0) {
+      return handleCrossWorkspaceSearch(args, entries, scopedResolver, registry)
+    }
+
+    const definition = registry.get(name)
+    if (!definition) {
+      return { ok: false, error: { code: 'INVALID_INPUT', message: '未知工具: ' + name } }
+    }
+    const resolved = resolveTargetWorkspace(args.workspace_id, entries)
+    if ('error' in resolved) return { ok: false, error: resolved.error }
+    const permissionError = assertToolPermission(definition.risk, resolved.entry.permissions)
+    if (permissionError) return { ok: false, error: permissionError }
+    const ctx = scopedResolver(resolved.entry.id)
+    if ('error' in ctx) {
+      return { ok: false, error: { code: 'INVALID_INPUT', message: ctx.error } }
+    }
+    // workspace_id 是网关层参数，不透传给工具实现
+    const toolArgs: Record<string, unknown> = { ...args }
+    delete toolArgs.workspace_id
+    delete toolArgs.workspace_ids
+    return definition.execute(toolArgs, ctx.context)
   }
 }
 

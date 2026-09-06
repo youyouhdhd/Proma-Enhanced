@@ -1,7 +1,7 @@
 /**
- * MCP Server 服务单例：
- * - 从应用设置读取配置并启动/停止；
- * - 解析 MCP Server 绑定的 Proma 工作区（projectRootPath 或托管项目目录）；
+ * MCP Server 服务单例（第二轮：Workspace Registry 架构）
+ * - 从应用设置读取配置（含多 Workspace 注册表）并启动/停止；
+ * - 每次工具调用时按 workspace 条目解析 Agent 工作区 rootPath（不缓存过期路径）；
  * - 对 IPC 暴露状态/启动/停止/更新配置/工具列表。
  */
 
@@ -10,34 +10,77 @@ import type { PromaMcpServerConfig, PromaMcpServerStatus, PromaMcpToolSummary } 
 import { getSettings } from '../settings-service'
 import { getAgentWorkspace, getProjectFilesPath } from '../agent-workspace-manager'
 import { normalizePromaMcpServerConfig } from './config'
-import { createDefaultLocalToolRegistry, selectVisibleTools } from './index'
+import { createDefaultLocalToolRegistry, LocalToolRegistry } from '../local-tools/registry'
+import type { LocalToolContext } from '../local-tools'
+import { buildMcpToolViews } from './tool-adapter'
 import { PromaMcpServer } from './server'
+import type { WorkspaceDirectoryEntry } from './multi-workspace'
 
-const registry = createDefaultLocalToolRegistry()
+const registry: LocalToolRegistry = createDefaultLocalToolRegistry()
 
-function resolveWorkspaceFromSettings(config: PromaMcpServerConfig): { workspaceId: string; rootPath: string } {
-  const workspaceId = config.workspaceId ?? ''
-  const workspace = workspaceId ? getAgentWorkspace(workspaceId) : undefined
-  if (!workspace) {
-    throw new Error('MCP Server 尚未绑定有效的 Proma 工作区，请先在设置中选择。')
-  }
-  const rootPath = workspace.projectRootPath ?? (workspace.slug ? getProjectFilesPath(workspace.slug) : '')
+/** 从配置条目解析一个可用 Workspace 目录（Agent 工作区存在 + 根目录有效） */
+function resolveWorkspaceEntry(config: PromaMcpServerConfig, entryId: string): WorkspaceDirectoryEntry {
+  const entry = config.workspaces.find((w) => w.id === entryId)
+  if (!entry) throw new Error('MCP Workspace 条目不存在: ' + entryId)
+  if (!entry.enabled) throw new Error('MCP Workspace 未启用: ' + entryId)
+  const workspace = getAgentWorkspace(entry.agentWorkspaceId)
+  const rootPath = workspace?.projectRootPath ?? (workspace?.slug ? getProjectFilesPath(workspace.slug) : '')
   if (!rootPath || !existsSync(rootPath)) {
-    throw new Error(`MCP Server 工作区根目录不可用：${rootPath || '(未设置)'}`)
+    throw new Error('MCP Workspace 根目录不可用：' + (entry.name ?? entry.agentWorkspaceId))
   }
-  return { workspaceId: workspace.id, rootPath }
+  return {
+    id: entry.id,
+    name: entry.name ?? workspace?.name ?? entry.agentWorkspaceId,
+    rootPath,
+    enabled: true,
+    permissions: entry.permissions,
+  }
+}
+
+/** 列出配置注册的全部 Workspace（含未启用；可用性按当前 Agent 工作区状态判定） */
+function listWorkspaceEntries(config: PromaMcpServerConfig): WorkspaceDirectoryEntry[] {
+  return config.workspaces.map((entry) => {
+    const workspace = getAgentWorkspace(entry.agentWorkspaceId)
+    const rootPath = workspace?.projectRootPath ?? (workspace?.slug ? getProjectFilesPath(workspace.slug) : '')
+    const available = Boolean(rootPath && existsSync(rootPath))
+    return {
+      id: entry.id,
+      name: entry.name ?? workspace?.name ?? entry.agentWorkspaceId,
+      ...(rootPath && available ? { rootPath } : {}),
+      enabled: entry.enabled && available,
+      permissions: entry.permissions,
+    } as WorkspaceDirectoryEntry
+  })
+}
+
+function workspaceContext(entry: WorkspaceDirectoryEntry): { context: LocalToolContext; entry: WorkspaceDirectoryEntry } {
+  return {
+    context: { workspaceId: entry.id, rootPath: entry.rootPath },
+    entry,
+  }
 }
 
 class PromaMcpServerService {
   private readonly server = new PromaMcpServer()
 
-  /** 按当前设置启动（设置未启用或未绑定工作区时抛错） */
+  /** 按当前设置启动（设置未启用或未授权任何项目时抛错） */
   async startFromSettings(): Promise<PromaMcpServerStatus> {
     const settings = getSettings()
     const config = normalizePromaMcpServerConfig(settings.mcpServer)
+    if (config.enabled && config.workspaces.filter((w) => w.enabled).length === 0) {
+      throw new Error('MCP Server 尚未授权任何项目，请先在设置中选择要共享的 Workspace。')
+    }
     return this.server.start({
       config,
-      resolveWorkspace: () => resolveWorkspaceFromSettings(config),
+      listWorkspaces: () => listWorkspaceEntries(config),
+      resolveWorkspaceContext: (entryId) => {
+        try {
+          const entry = resolveWorkspaceEntry(config, entryId)
+          return workspaceContext(entry)
+        } catch (error) {
+          return { error: error instanceof Error ? error.message : String(error) }
+        }
+      },
       registry,
     })
   }
@@ -56,9 +99,20 @@ class PromaMcpServerService {
     const wasRunning = this.server.running
     if (wasRunning) await this.server.stop()
     if (normalized.enabled) {
+      if (normalized.workspaces.filter((w) => w.enabled).length === 0) {
+        throw new Error('MCP Server 尚未授权任何项目，请先在设置中选择要共享的 Workspace。')
+      }
       return this.server.start({
         config: normalized,
-        resolveWorkspace: () => resolveWorkspaceFromSettings(normalized),
+        listWorkspaces: () => listWorkspaceEntries(normalized),
+        resolveWorkspaceContext: (entryId) => {
+          try {
+            const entry = resolveWorkspaceEntry(normalized, entryId)
+            return workspaceContext(entry)
+          } catch (error) {
+            return { error: error instanceof Error ? error.message : String(error) }
+          }
+        },
         registry,
       })
     }
@@ -68,13 +122,23 @@ class PromaMcpServerService {
   listTools(): PromaMcpToolSummary[] {
     const settings = getSettings()
     const config = normalizePromaMcpServerConfig(settings.mcpServer)
-    const visible = new Set(selectVisibleTools(config, registry).map((t) => t.name))
-    return registry.list().map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      risk: tool.risk,
-      enabled: visible.has(tool.name),
-    }))
+    const views = buildMcpToolViews(config, registry)
+    const visible = new Set(views.map((view) => view.name))
+    // 摘要合并 registry 工具 + 多工作区固定工具
+    const seen = new Set<string>()
+    const summaries: PromaMcpToolSummary[] = []
+    for (const view of views) {
+      if (seen.has(view.name)) continue
+      seen.add(view.name)
+      const risk = view.annotations.readOnlyHint ? 'read' as const : (registry.get(view.name)?.risk ?? 'read' as const)
+      summaries.push({ name: view.name, description: view.description, risk, enabled: visible.has(view.name) })
+    }
+    for (const tool of registry.list()) {
+      if (!seen.has(tool.name)) {
+        summaries.push({ name: tool.name, description: tool.description, risk: tool.risk, enabled: false })
+      }
+    }
+    return summaries
   }
 }
 

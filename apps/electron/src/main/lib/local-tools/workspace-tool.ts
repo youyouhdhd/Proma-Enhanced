@@ -11,7 +11,12 @@ import type { LocalToolDefinition } from './types'
 export const workspaceInfoTool: LocalToolDefinition = {
   name: 'workspace_info',
   description: '获取当前 MCP 绑定工作区的信息（名称、根路径、是否为 Git 仓库）。',
-  inputSchema: { type: 'object', properties: {} },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      workspace_id: { type: 'string', description: '目标项目（workspace_list 返回的 id）；仅授权一个项目时可省略' },
+    },
+  },
   risk: 'read',
   async execute(_input, context) {
     const { rootPath } = context

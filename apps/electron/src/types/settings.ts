@@ -4,7 +4,7 @@
  * 主题模式、IPC 通道等设置相关定义。
  */
 
-import type { EnvironmentCheckResult, ThinkingConfig, AgentEffort, AgentThinkingLevel, FeishuSessionMirrorSettings, TerminalProfile, WindowsShellPreference, PromaMcpServerConfig } from '@proma/shared'
+import type { EnvironmentCheckResult, ThinkingConfig, AgentEffort, AgentThinkingLevel, FeishuSessionMirrorSettings, TerminalProfile, WindowsShellPreference, PromaMcpServerConfig, PromaMcpTunnelSettings } from '@proma/shared'
 
 /** 通知音场景类型 */
 export type NotificationSoundType = 'taskComplete' | 'permissionRequest' | 'exitPlanMode' | 'planningReminder'
@@ -341,6 +341,8 @@ export interface AppSettings {
   archiveAfterDays?: number
   /** PROMA MCP Server（供 ChatGPT Web 等外部 Client 调用本地工具） */
   mcpServer?: PromaMcpServerConfig
+  /** OpenAI Secure MCP Tunnel 集成（Runtime API Key 加密存储，不入 settings.json） */
+  mcpTunnel?: PromaMcpTunnelSettings
   /** 发送消息快捷键模式：true = Cmd/Ctrl+Enter 发送，false(默认) = Enter 发送 */
   sendWithCmdEnter?: boolean
   /** 用户自定义快捷键覆盖 */

@@ -81,6 +81,7 @@ export function getSettings(): AppSettings {
       richTextRenderingEnabled: data.richTextRenderingEnabled ?? false,
       feishuSessionMirror: data.feishuSessionMirror ?? { mode: 'off' },
       mcpServer: normalizePromaMcpServerConfig(data.mcpServer),
+      mcpTunnel: data.mcpTunnel && typeof data.mcpTunnel === 'object' ? { ...data.mcpTunnel } : undefined,
       visionRelay: data.visionRelay ?? { enabled: false },
       windowsShellPreference: settings.windowsShellPreference ?? 'auto',
       lastWindowsTerminalProfile: process.platform === 'win32'

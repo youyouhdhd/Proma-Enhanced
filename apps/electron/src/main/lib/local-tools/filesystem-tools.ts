@@ -23,6 +23,7 @@ function isProbablyBinary(buffer: Buffer): boolean {
 const listFilesInputSchema = {
   type: 'object',
   properties: {
+    workspace_id: { type: 'string', description: '目标项目（workspace_list 返回的 id）；仅授权一个项目时可省略' },
     path: { type: 'string', description: '相对工作区根的目录路径，默认 "."' },
     depth: { type: 'number', description: '递归深度，默认 2，最大 5' },
   },
@@ -64,8 +65,9 @@ export const readFileTool: LocalToolDefinition = {
   description: '读取工作区内文本文件的内容，可指定行范围（1 起始、闭区间）。',
   inputSchema: {
     type: 'object',
-    required: ['path'],
+  required: ['path'],
     properties: {
+      workspace_id: { type: 'string', description: '目标项目（workspace_list 返回的 id）；仅授权一个项目时可省略' },
       path: { type: 'string', description: '相对工作区根的文件路径' },
       startLine: { type: 'number', description: '起始行（1 起始）' },
       endLine: { type: 'number', description: '结束行（闭区间）' },
@@ -96,8 +98,9 @@ export const writeFileTool: LocalToolDefinition = {
   description: '在工作区内创建或整体覆盖一个文本文件（父目录自动创建）。',
   inputSchema: {
     type: 'object',
-    required: ['path', 'content'],
+  required: ['path', 'content'],
     properties: {
+      workspace_id: { type: 'string', description: '目标项目（workspace_list 返回的 id）；仅授权一个项目时可省略' },
       path: { type: 'string', description: '相对工作区根的文件路径' },
       content: { type: 'string', description: '完整文件内容（UTF-8）' },
     },
@@ -119,8 +122,9 @@ export const editFileTool: LocalToolDefinition = {
   description: '确定性编辑：oldText 必须在文件中唯一匹配，否则拒绝执行（不做模糊替换）。',
   inputSchema: {
     type: 'object',
-    required: ['path', 'oldText', 'newText'],
+  required: ['path', 'oldText', 'newText'],
     properties: {
+      workspace_id: { type: 'string', description: '目标项目（workspace_list 返回的 id）；仅授权一个项目时可省略' },
       path: { type: 'string', description: '相对工作区根的文件路径' },
       oldText: { type: 'string', description: '要被替换的原文（必须唯一匹配）' },
       newText: { type: 'string', description: '替换后的文本' },

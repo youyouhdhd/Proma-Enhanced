@@ -11,6 +11,8 @@ export interface SessionEntry {
   server: Server
   createdAt: number
   lastUsedAt: number
+  /** initialize 时的 endpoint 作用域（/mcp = 全部；/mcp/<profileId> = Profile 子集） */
+  profileId?: string
 }
 
 export class SessionManager {

@@ -23,7 +23,7 @@ export interface LocalToolResult {
   /** 模型可读的文本形式（MCP text content） */
   text?: string
   error?: {
-    code: 'PATH_OUTSIDE_WORKSPACE' | 'PATH_NOT_FOUND' | 'BINARY_FILE' | 'MATCH_NOT_FOUND' | 'MATCH_NOT_UNIQUE' | 'INVALID_INPUT' | 'EXECUTION_ERROR' | 'TIMEOUT' | 'ABORTED' | 'GIT_ERROR'
+    code: 'PATH_OUTSIDE_WORKSPACE' | 'PATH_NOT_FOUND' | 'BINARY_FILE' | 'MATCH_NOT_FOUND' | 'MATCH_NOT_UNIQUE' | 'INVALID_INPUT' | 'EXECUTION_ERROR' | 'TIMEOUT' | 'ABORTED' | 'GIT_ERROR' | 'PERMISSION_DENIED'
     message: string
   }
 }

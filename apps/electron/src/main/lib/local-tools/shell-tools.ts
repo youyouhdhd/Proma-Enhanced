@@ -23,6 +23,7 @@ export const shellExecuteTool: LocalToolDefinition = {
     type: 'object',
     required: ['command'],
     properties: {
+      workspace_id: { type: 'string', description: '目标项目（workspace_list 返回的 id）；仅授权一个项目时可省略' },
       command: { type: 'string', description: '要执行的命令（经 shell 解析）' },
       cwd: { type: 'string', description: '相对工作区根的工作目录，默认 "."' },
       timeoutMs: { type: 'number', description: '超时毫秒数，默认 120000，上限 600000' },

@@ -161,6 +161,14 @@ export function getSettingsPath(): string {
 }
 
 /**
+ * MCP Tunnel Runtime API Key 的加密存储路径（safeStorage 加密后的 base64）。
+ * 独立于 settings.json：明文绝不落盘、不进日志、不进命令行（第二轮规范 §23）。
+ */
+export function getMcpTunnelKeyPath(): string {
+  return join(getConfigDir(), 'mcp-tunnel-key')
+}
+
+/**
  * 获取用户授权的 Markdown Vault 配置路径。
  * 内容仅保存 Vault 根目录与用户授予的能力，不保存笔记正文或索引。
  */

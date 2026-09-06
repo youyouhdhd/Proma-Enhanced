@@ -20,7 +20,12 @@ function runGit(rootPath: string, args: string[]): { stdout: string; stderr: str
 export const gitStatusTool: LocalToolDefinition = {
   name: 'git_status',
   description: '查看工作区 Git 状态（分支 + porcelain 状态列表），无任何副作用。',
-  inputSchema: { type: 'object', properties: {} },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      workspace_id: { type: 'string', description: '目标项目（workspace_list 返回的 id）；仅授权一个项目时可省略' },
+    },
+  },
   risk: 'read',
   async execute(_input, context) {
     const branch = runGit(context.rootPath, ['rev-parse', '--abbrev-ref', 'HEAD'])
@@ -37,6 +42,7 @@ export const gitDiffTool: LocalToolDefinition = {
   inputSchema: {
     type: 'object',
     properties: {
+      workspace_id: { type: 'string', description: '目标项目（workspace_list 返回的 id）；仅授权一个项目时可省略' },
       staged: { type: 'boolean', description: 'true 时查看暂存区 diff' },
       path: { type: 'string', description: '限定 diff 的相对路径' },
     },

@@ -47,8 +47,9 @@ export const searchTextTool: LocalToolDefinition = {
   description: '在工作区文本文件中搜索关键字（大小写不敏感的子串匹配），返回命中行。',
   inputSchema: {
     type: 'object',
-    required: ['query'],
+  required: ['query'],
     properties: {
+      workspace_id: { type: 'string', description: '目标项目（workspace_list 返回的 id）；仅授权一个项目时可省略' },
       query: { type: 'string', description: '搜索关键字' },
       path: { type: 'string', description: '限定搜索的子目录，默认 "."' },
       glob: { type: 'string', description: '文件名过滤，如 "*.ts"' },
@@ -96,8 +97,9 @@ export const findFilesTool: LocalToolDefinition = {
   description: '按 glob 模式（如 "**/*oauth*.ts"）查找工作区内的文件路径。',
   inputSchema: {
     type: 'object',
-    required: ['pattern'],
+  required: ['pattern'],
     properties: {
+      workspace_id: { type: 'string', description: '目标项目（workspace_list 返回的 id）；仅授权一个项目时可省略' },
       pattern: { type: 'string', description: 'glob 模式，支持 ** / * / ?' },
       path: { type: 'string', description: '限定查找的子目录，默认 "."' },
     },

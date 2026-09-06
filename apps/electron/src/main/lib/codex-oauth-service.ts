@@ -4,14 +4,15 @@
  * 复用 Pi SDK（@earendil-works/pi-ai/oauth）内置的 Codex OAuth 流程完成登录：
  * - 登录必须在主进程（Node 侧）执行——SDK 使用 Node crypto 生成 PKCE，并在
  *   本地 127.0.0.1:1455 起回调服务接收授权码，无法在渲染进程运行。
- * - 浏览器由本服务通过 shell.openExternal 打开；SDK 内部的回调服务负责接收
+ * - 本服务只负责"跑一次登录流程""刷新一次 token"两个纯操作；是否自动打开
+ *   浏览器由 CodexOAuthSessionController 决定（每个会话最多自动打开一次）。
+ *   SDK 内部的回调服务负责接收
  *   redirect 并完成 code→token 交换，最终返回 { access, refresh, expires, accountId }。
  *
  * token 的加密存储与过期刷新由上层（channel-manager / pi-model-registry）负责，
  * 本服务只封装"跑一次登录流程""刷新一次 token"两个纯操作。
  */
 
-import { shell } from 'electron'
 import type { CodexOAuthCredentials, CodexOAuthDeviceCode, CodexOAuthLoginMethod, CodexOAuthManualCodeRequest } from '@proma/shared'
 import { runWithOAuthProxyScope } from './oauth-proxy-scope'
 import { ManualCodeGate } from './codex-oauth-manual-gate'
@@ -148,12 +149,11 @@ export async function loginCodexOAuth(options?: CodexLoginOptions): Promise<Code
         },
         notify: (event) => {
           if (event.type === 'auth_url') {
+            // 只上报 URL；是否自动打开浏览器由 CodexOAuthSessionController 决定（每会话最多一次）。
             options?.onAuthUrl?.(event.url)
-            shell.openExternal(event.url).catch((err) => console.error('[Codex OAuth] 打开浏览器失败:', err))
           } else if (event.type === 'device_code') {
             console.log(`[Codex OAuth] 请在浏览器中授权（设备码：${event.userCode}）`)
             options?.onDeviceCode?.({ userCode: event.userCode, verificationUri: event.verificationUri })
-            shell.openExternal(event.verificationUri).catch((err) => console.error('[Codex OAuth] 打开设备授权页面失败:', err))
           } else if (event.type === 'progress' || event.type === 'info') {
             console.log(`[Codex OAuth] ${event.message}`)
             options?.onProgress?.(event.message)

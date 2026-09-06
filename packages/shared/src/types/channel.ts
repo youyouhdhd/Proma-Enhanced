@@ -501,16 +501,12 @@ export const CHANNEL_IPC_CHANNELS = {
   TEST_DIRECT: 'channel:test-direct',
   /** 查询订阅 Plan 额度 */
   GET_PLAN_QUOTA: 'channel:get-plan-quota',
-  /** 发起 ChatGPT (Codex) OAuth 登录，返回加密凭据与账号信息 */
-  CODEX_OAUTH_LOGIN: 'channel:codex-oauth-login',
-  /** 取消进行中的 ChatGPT OAuth 登录流程 */
+  /** 发起 ChatGPT (Codex) OAuth 登录：立即返回 sessionId，后续事件经 CODEX_OAUTH_EVENT 推送 */
+  CODEX_OAUTH_START: 'channel:codex-oauth-start',
+  /** 取消进行中的 ChatGPT OAuth 登录会话 */
   CODEX_OAUTH_CANCEL: 'channel:codex-oauth-cancel',
-  /** Codex device-code 已就绪（主进程推送给发起登录的渲染窗口） */
-  CODEX_OAUTH_DEVICE_CODE: 'channel:codex-oauth-device-code',
-  /** Codex OAuth 授权 URL 已生成（主进程推送给发起登录的渲染窗口） */
-  CODEX_OAUTH_AUTH_URL: 'channel:codex-oauth-auth-url',
-  /** Pi 触发 manual_code prompt：等待用户粘贴授权回调 URL */
-  CODEX_OAUTH_MANUAL_CODE_REQUESTED: 'channel:codex-oauth-manual-code-requested',
+  /** Codex OAuth 会话事件推送（auth_url / device_code / manual_input_ready / progress / success / error） */
+  CODEX_OAUTH_EVENT: 'channel:codex-oauth-event',
   /** 渲染进程提交手动授权回调 URL（首次生效，重复提交忽略） */
   CODEX_OAUTH_SUBMIT_CALLBACK: 'channel:codex-oauth-submit-callback',
   /** 发起 xAI（Grok/X 订阅）OAuth 登录 */
@@ -529,6 +525,53 @@ export const CHANNEL_IPC_CHANNELS = {
  */
 export type CodexOAuthLoginMethod = 'browser' | 'device_code'
 
+/**
+ * Codex OAuth 会话状态机（第二轮优化）。
+ *
+ * 登录不再是一次 request-response：start 立即返回 sessionId，
+ * auth_url / manual_input_ready / success 等全部作为中间事件推送，
+ * 避免渲染层因等待最终结果而出现「浏览器先打开、授权链接后出现」的倒置体验。
+ */
+export type CodexOAuthStatus =
+  | 'idle'
+  | 'starting'
+  | 'waiting_authorization'
+  | 'exchanging_token'
+  | 'success'
+  | 'error'
+  | 'cancelled'
+
+/** Codex OAuth 会话快照（start 的返回值）。 */
+export interface CodexOAuthSessionSnapshot {
+  id: string
+  status: CodexOAuthStatus
+  authUrl?: string
+  autoOpenBrowser: boolean
+  /** 同一会话内 shell.openExternal 最多自动执行一次 */
+  browserOpened: boolean
+  manualInputReady: boolean
+  createdAt: number
+  error?: string
+}
+
+/** codex-oauth:start 的结果。已有进行中的会话时 reused=true 并复用同一 sessionId。 */
+export interface CodexOAuthStartResult {
+  sessionId?: string
+  reused?: boolean
+  snapshot?: CodexOAuthSessionSnapshot
+  error?: string
+}
+
+/** Codex OAuth 会话事件。渲染层只接受当前 sessionId 的事件，旧会话迟到事件全部丢弃。 */
+export type CodexOAuthSessionEvent =
+  | { sessionId: string; type: 'status'; status: CodexOAuthStatus }
+  | { sessionId: string; type: 'auth_url'; url: string }
+  | { sessionId: string; type: 'device_code'; deviceCode: CodexOAuthDeviceCode }
+  | { sessionId: string; type: 'manual_input_ready'; request: CodexOAuthManualCodeRequest }
+  | { sessionId: string; type: 'progress'; message: string }
+  | { sessionId: string; type: 'success'; credentials: string; accountId?: string }
+  | { sessionId: string; type: 'error'; message: string }
+
 /** Pi Codex device-code 登录流程的用户可见信息。 */
 export interface CodexOAuthDeviceCode {
   userCode: string
@@ -546,20 +589,6 @@ export interface CodexOAuthManualCodeRequest {
 /** 提交手动回调 URL 的结果；重复提交只允许首次生效。 */
 export interface CodexOAuthSubmitCallbackResult {
   accepted: boolean
-}
-
-export interface CodexOAuthLoginResult {
-  /** 是否登录成功 */
-  success: boolean
-  /**
-   * 序列化后的凭据 JSON（明文）。与现有 apiKey 明文回传模式一致：
-   * 渲染层拿到后作为 Channel.apiKey 传给 create/update，由 channel-manager 加密存储。
-   */
-  credentials?: string
-  /** 登录账号标识，用于 UI 展示 */
-  accountId?: string
-  /** 失败或取消时的用户可读原因 */
-  message?: string
 }
 
 /** xAI（Grok/X 订阅）OAuth 登录结果。 */
