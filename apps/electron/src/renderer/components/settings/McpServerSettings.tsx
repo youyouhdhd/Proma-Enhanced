@@ -8,7 +8,7 @@
 
 import * as React from 'react'
 import { Loader2, Play, Square, RefreshCw, TerminalSquare, FolderGit2, ShieldCheck, Globe, Plug, Stethoscope, Trash2, Plus, KeyRound, ExternalLink, Download, FolderOpen } from 'lucide-react'
-import type { PromaMcpServerConfig, PromaMcpServerStatus, PromaMcpToolSummary, PromaMcpTunnelState, PromaMcpWorkspaceEntry, PromaMcpTunnelDoctorResult, PromaMcpTunnelDetection, PromaMcpTunnelClientMode, AgentWorkspace } from '@proma/shared'
+import type { PromaMcpServerConfig, PromaMcpServerStatus, PromaMcpToolSummary, PromaMcpTunnelState, PromaMcpWorkspaceEntry, PromaMcpTunnelDoctorResult, PromaMcpTunnelDetection, PromaMcpTunnelClientMode, PromaMcpConnectorDiagnosis, AgentWorkspace } from '@proma/shared'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -66,6 +66,7 @@ export function McpServerSettings(): React.ReactElement {
   const [customPathInput, setCustomPathInput] = React.useState('')
   const [detection, setDetection] = React.useState<PromaMcpTunnelDetection | null>(null)
   const [doctor, setDoctor] = React.useState<PromaMcpTunnelDoctorResult | null>(null)
+  const [diagnosis, setDiagnosis] = React.useState<PromaMcpConnectorDiagnosis | null>(null)
   const [autoConnect, setAutoConnect] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
 
@@ -244,6 +245,10 @@ export function McpServerSettings(): React.ReactElement {
     await window.electronAPI.startMcpTunnel()
   }
 
+  const runConnectorDiagnosis = async (): Promise<void> => {
+    setDiagnosis(await window.electronAPI.diagnoseMcpConnector())
+  }
+
   const phase = tunnelPhaseLabel(tunnel)
   const clientInfo = tunnel?.client
   const lastTool = status?.lastToolCall
@@ -385,6 +390,18 @@ export function McpServerSettings(): React.ReactElement {
                 <div className="text-emerald-600/90">这个地址不需要复制。PROMA 会自动把它交给 OpenAI Tunnel Client。</div>
                 <div>已开放：{status.workspaces.filter((w) => w.enabled).length} 个项目 · {tools.filter((t) => t.enabled).length} 个工具 · 活跃会话 {status.activeSessions}</div>
                 {lastTool && <div className="text-emerald-600">✓ 已收到来自 ChatGPT 的 MCP 请求 · 最近工具：{lastTool.name} · {new Date(lastTool.at).toLocaleTimeString()}</div>}
+                {status.recentRequests.length > 0 && (
+                  <div className="pt-1">
+                    <div className="text-muted-foreground">最近 MCP 请求</div>
+                    <div className="mt-0.5 max-h-24 overflow-auto font-mono text-[10px]">
+                      {status.recentRequests.slice(-8).reverse().map((trace, index) => (
+                        <div key={trace.at + '-' + index} className={trace.statusCode >= 400 ? 'text-destructive' : 'text-foreground/80'}>
+                          {new Date(trace.at).toLocaleTimeString()} {trace.jsonRpcMethod ?? trace.method} {trace.statusCode}{trace.hasSessionId ? '' : ' (无会话)'}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             {status?.errorMessage && (
@@ -582,7 +599,15 @@ export function McpServerSettings(): React.ReactElement {
         <SettingsCard divided={false}>
           <div className="px-4 py-4 space-y-3">
             <div className="flex items-center gap-2 text-sm font-medium"><KeyRound size={14} /> 步骤 5 · OpenAI Platform：创建 Runtime API Key</div>
-            <div className="text-xs leading-relaxed text-muted-foreground">Runtime API Key 用来证明这台电脑上的 OpenAI Tunnel Client 有权使用刚创建的 Tunnel。① 创建 Runtime API Key；② 为 Tunnel 配置需要的权限；③ 复制 Key；④ 回到 PROMA 粘贴。Key 只保存在这台电脑（系统凭据加密），不会进入 ChatGPT。</div>
+            <div className="text-xs leading-relaxed text-muted-foreground">
+              Runtime API Key 用于让这台电脑上的 OpenAI Tunnel Client 使用你创建的 Tunnel。它不是 ChatGPT 对话用的 API Key，也不是 PROMA 调用模型的 Key。PROMA 使用系统凭据加密保存，并只在启动 Tunnel Client 时作为环境变量提供给本地进程。
+            </div>
+            <div className="rounded-md bg-muted/50 px-3 py-2 text-[11px] text-muted-foreground space-y-0.5">
+              <div className="font-medium text-foreground">推荐权限（Tunnels）</div>
+              <div>✓ Read　✓ Use　○ Manage（一般不需要）</div>
+              <div>同时注意：Runtime API Key 所属用户或 Service Account 自身也必须拥有该 Tunnel 的 Read + Use 权限。</div>
+            </div>
+            <div className="text-xs leading-relaxed text-muted-foreground">① 创建 Runtime API Key；② 为 Tunnel 配置需要的权限；③ 复制 Key；④ 回到 PROMA 粘贴。不要把 Runtime API Key 粘贴到 ChatGPT。</div>
             <div className="grid gap-2 md:grid-cols-[140px_1fr] md:items-center">
               <div className="text-xs text-muted-foreground">Runtime API Key</div>
               <div className="flex items-center gap-2">
@@ -624,6 +649,9 @@ export function McpServerSettings(): React.ReactElement {
                 <Button size="sm" variant="ghost" type="button" className="h-7" onClick={() => { void window.electronAPI.runMcpTunnelDoctor().then((r) => setDoctor(r)) }}>
                   <Stethoscope size={13} /> 运行诊断
                 </Button>
+                <Button size="sm" variant="ghost" type="button" className="h-7" onClick={() => { void runConnectorDiagnosis() }}>
+                  连接失败？运行完整诊断
+                </Button>
               </div>
             </div>
             {tunnel?.error && (
@@ -634,18 +662,37 @@ export function McpServerSettings(): React.ReactElement {
             )}
             {doctor && (
               <div className="rounded-md bg-muted/50 px-3 py-2 text-xs space-y-1.5">
-                <div className="font-medium">连接诊断</div>
+                <div className="font-medium">连接诊断{doctor.ok ? '' : '（存在失败项）'}</div>
                 {doctor.checks.map((check) => (
                   <div key={check.name} className="flex items-center gap-2">
-                    <StatusDot on={check.ok} />
-                    <span className={check.ok ? 'text-foreground' : 'text-destructive'}>{check.name}</span>
-                    {check.message && <span className="text-muted-foreground">{check.message}</span>}
+                    {check.state === 'pass' ? <StatusDot on /> : check.state === 'fail' ? <span className="font-bold text-destructive">✕</span> : <span className="font-bold text-muted-foreground">?</span>}
+                    <span className={check.state === 'fail' ? 'text-destructive' : check.state === 'pass' ? 'text-foreground' : 'text-muted-foreground'}>{check.name}</span>
+                    {check.message && <span className="text-muted-foreground/80">{check.message}</span>}
                   </div>
                 ))}
                 <details>
                   <summary className="cursor-pointer select-none text-muted-foreground">查看技术详情</summary>
                   <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/60 px-2 py-1 font-mono text-[10px]">{doctor.technical ? ('exit: ' + (doctor.technical.exitCode ?? '-') + '\n' + (doctor.technical.stdout || '') + '\n' + (doctor.technical.stderr || '')) : '（无）'}</pre>
                 </details>
+              </div>
+            )}
+            {diagnosis && (
+              <div className="rounded-md bg-muted/50 px-3 py-2 text-xs space-y-1.5">
+                <div className="font-medium">ChatGPT Connector 端到端诊断</div>
+                {diagnosis.checks.map((check, index) => (
+                  <div key={check.name + '-' + index} className="flex items-center gap-2">
+                    {check.state === 'pass' ? <StatusDot on /> : check.state === 'fail' ? <span className="font-bold text-destructive">✕</span> : <span className="font-bold text-muted-foreground">?</span>}
+                    <span className={check.state === 'fail' ? 'text-destructive' : check.state === 'pass' ? 'text-foreground' : 'text-muted-foreground'}>{check.name}</span>
+                    {check.message && <span className="text-muted-foreground/80">{check.message}</span>}
+                  </div>
+                ))}
+                {diagnosis.conclusion && (
+                  <div className={cn('rounded-md px-2 py-1.5', diagnosis.conclusion.id === 'OK' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-amber-500/10 text-amber-700 dark:text-amber-300')}>
+                    <div className="font-medium">{diagnosis.conclusion.title}</div>
+                    <div className="mt-0.5 leading-relaxed">{diagnosis.conclusion.detail}</div>
+                    {diagnosis.conclusion.action && <div className="mt-0.5">下一步：{diagnosis.conclusion.action}</div>}
+                  </div>
+                )}
               </div>
             )}
           </div>

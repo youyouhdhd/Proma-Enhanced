@@ -25,12 +25,8 @@ export interface TunnelDoctorRaw {
   stderr: string
 }
 
-/** Doctor 结构化结果 */
-export interface TunnelDoctorResult {
-  ok: boolean
-  checks: Array<{ name: string; ok: boolean; message?: string }>
-  technical: { exitCode?: number; stdout: string; stderr: string; version?: string }
-}
+/** Doctor 结构化结果（V5：三态诊断，与 shared 契约一致） */
+export type TunnelDoctorResult = import('@proma/shared').PromaMcpTunnelDoctorResult
 
 export type TunnelClientSpawnSync = (
   executable: string,

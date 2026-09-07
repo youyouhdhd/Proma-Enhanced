@@ -81,7 +81,23 @@ export class TunnelClientManager {
       return { installed: false, source, errorCode: 'TUNNEL_CLIENT_VERSION_UNSUPPORTED', errorMessage: '这个程序可以启动，但不是可用的 OpenAI Tunnel Client（exit ' + result.status + '）。' }
     }
     const version = this.adapter.parseVersion((result.stdout ?? '') + (result.stderr ?? ''))
-    return { installed: true, path: executablePath, source, ...(version ? { version } : {}) }
+    // V5 §8：--version 通过只说明是个能跑的程序；必须确认 doctor / run 子命令存在
+    // 才算完整 CLI（tunnel-client-runtime.exe 之类的 runtime-only 包在此被拒绝）。
+    const doctorHelp = this.deps.spawnSync(executablePath, this.adapter.buildDoctorHelpArgs(), { encoding: 'utf8', timeout: 10_000, windowsHide: true })
+    const runHelp = this.deps.spawnSync(executablePath, this.adapter.buildRunHelpArgs(), { encoding: 'utf8', timeout: 10_000, windowsHide: true })
+    const fullCli = doctorHelp.status === 0 && runHelp.status === 0
+    if (!fullCli) {
+      return {
+        installed: false,
+        executableKind: 'runtime-only',
+        source,
+        ...(version ? { version } : {}),
+        path: executablePath,
+        errorCode: 'TUNNEL_CLIENT_VERSION_UNSUPPORTED',
+        errorMessage: '这个程序是 OpenAI Tunnel Runtime，不是 PROMA 所需的完整 Tunnel Client CLI（缺少 doctor / run 子命令）。请选择完整 tunnel-client 可执行文件，或使用「安装官方组件」。',
+      }
+    }
+    return { installed: true, executableKind: 'full-cli', path: executablePath, source, ...(version ? { version } : {}) }
   }
 
   /** 按配置解析当前应使用的程序（custom → managed → system PATH） */

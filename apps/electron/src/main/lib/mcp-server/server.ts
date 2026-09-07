@@ -28,7 +28,7 @@ import {
   type WorkspaceDirectoryEntry,
   type WorkspaceContextResolver,
 } from './multi-workspace'
-import type { PromaMcpServerConfig, PromaMcpServerStatus } from '@proma/shared'
+import type { PromaMcpRequestTrace, PromaMcpServerConfig, PromaMcpServerStatus } from '@proma/shared'
 import type { LocalToolRegistry, LocalToolContext, LocalToolResult } from '../local-tools'
 
 const IDLE_TTL_MS = 30 * 60 * 1000
@@ -51,6 +51,8 @@ export class PromaMcpServer {
   private registry: LocalToolRegistry | null = null
   private lastError: string | undefined
   private lastToolCall: { name: string; at: number } | undefined
+  /** 最近 MCP 请求观测（环形缓冲，V5 §10） */
+  private readonly requestTraces: PromaMcpRequestTrace[] = []
 
   get running(): boolean {
     return this.httpServer !== null
@@ -119,8 +121,15 @@ export class PromaMcpServer {
       workspaces: summaries,
       profileEndpoints,
       ...(this.lastToolCall ? { lastToolCall: this.lastToolCall } : {}),
+      recentRequests: [...this.requestTraces],
       ...(this.lastError ? { errorMessage: this.lastError } : {}),
     }
+  }
+
+  /** 记录一条请求观测（不含 Authorization / Runtime Key / 工具参数） */
+  private recordRequest(trace: PromaMcpRequestTrace): void {
+    this.requestTraces.push(trace)
+    if (this.requestTraces.length > 50) this.requestTraces.shift()
   }
 
   private async closeSession(sessionId: string): Promise<void> {
@@ -192,11 +201,67 @@ export class PromaMcpServer {
     const sessionHeader = req.headers['mcp-session-id']
     const sessionId = typeof sessionHeader === 'string' ? sessionHeader : undefined
 
-    if (req.method === 'POST' && !sessionId) {
-      await this.handleInitialize(req, res, scope.profileId)
+    if (req.method === 'POST') {
+      // V5 §10：在路由层读取并观测请求（只记录 method / path / session 有无 / JSON-RPC
+      // method / 协议版本 / 状态码；绝不记录 Authorization、Runtime Key、工具参数）。
+      let body: unknown
+      try {
+        body = await readJsonBody(req)
+      } catch {
+        this.recordRequest({ at: Date.now(), method: 'POST', path: url.split('?')[0] ?? '', hasSessionId: Boolean(sessionId), statusCode: 400 })
+        res.writeHead(400, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null }))
+        return
+      }
+      const rpcBody = (body && typeof body === 'object' ? body : {}) as { method?: unknown; params?: { protocolVersion?: unknown } }
+      const jsonRpcMethod = typeof rpcBody.method === 'string' ? rpcBody.method : undefined
+      const headerVersion = req.headers['mcp-protocol-version']
+      const protocolVersion = typeof rpcBody.params?.protocolVersion === 'string'
+        ? rpcBody.params.protocolVersion
+        : typeof headerVersion === 'string' ? headerVersion : undefined
+      let statusCode = 200
+      const originalWriteHead = res.writeHead.bind(res)
+      res.writeHead = ((...args: Parameters<typeof originalWriteHead>) => {
+        const status = args[0]
+        if (typeof status === 'number') statusCode = status
+        return originalWriteHead(...args)
+      }) as typeof res.writeHead
+
+      try {
+        if (!sessionId) {
+          // V5 §11：无 Session ID 不再默认当作 initialize——按 JSON-RPC method 分流。
+          // initialize 走会话模型（legacy 兼容）；tools/list / tools/call 等现代无状态请求
+          // 直接处理（TC-V5-MCP-01/02）。
+          if (jsonRpcMethod === 'initialize' || jsonRpcMethod === undefined) {
+            await this.handleInitialize(req, res, body, scope.profileId)
+          } else {
+            await this.handleStatelessRequest(req, res, body, scope.profileId)
+          }
+        } else {
+          const entry = this.sessions.get(sessionId)
+          if (!entry) {
+            res.writeHead(404, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null }))
+          } else {
+            this.sessions.touch(sessionId)
+            await entry.transport.handleRequest(req, res, body)
+          }
+        }
+      } finally {
+        this.recordRequest({
+          at: Date.now(),
+          method: 'POST',
+          path: url.split('?')[0] ?? '',
+          hasSessionId: Boolean(sessionId),
+          ...(jsonRpcMethod ? { jsonRpcMethod } : {}),
+          ...(protocolVersion ? { protocolVersion } : {}),
+          statusCode,
+        })
+      }
       return
     }
 
+    // GET（SSE 流）保持会话模型
     const entry = sessionId ? this.sessions.get(sessionId) : undefined
     if (!entry) {
       res.writeHead(404, { 'content-type': 'application/json' })
@@ -204,16 +269,13 @@ export class PromaMcpServer {
       return
     }
     this.sessions.touch(sessionId!)
-    const body = req.method === 'POST' ? await readJsonBody(req) : undefined
-    await entry.transport.handleRequest(req, res, body)
+    await entry.transport.handleRequest(req, res, undefined)
   }
 
-  /** 首次 POST（initialize）：为该客户端创建独立 transport + MCP Server 实例，绑定 endpoint 作用域 */
-  private async handleInitialize(req: IncomingMessage, res: ServerResponse, profileId?: string): Promise<void> {
-    const body = await readJsonBody(req)
+  /** 构造已接线的 MCP Server 实例（会话模式与无状态模式共用，工具逻辑只有一份） */
+  private createConfiguredServer(profileId: string | undefined): Server | undefined {
     if (!this.registry || !this.config || !this.resolveWorkspaceContext) {
-      res.writeHead(503).end()
-      return
+      return undefined
     }
     const registry = this.registry
     const resolveWorkspaceContext = this.resolveWorkspaceContext
@@ -247,7 +309,16 @@ export class PromaMcpServer {
         isError: !result.ok,
       }
     })
+    return server
+  }
 
+  /** 首次 POST（initialize）：为该客户端创建独立 transport + MCP Server 实例，绑定 endpoint 作用域 */
+  private async handleInitialize(req: IncomingMessage, res: ServerResponse, body: unknown, profileId?: string): Promise<void> {
+    const server = this.createConfiguredServer(profileId)
+    if (!server) {
+      res.writeHead(503).end()
+      return
+    }
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (sessionId: string) => {
@@ -259,6 +330,28 @@ export class PromaMcpServer {
     })
     await server.connect(transport)
     await transport.handleRequest(req, res, body)
+  }
+
+  /**
+   * 现代无状态请求（V5 §11）：tools/list / tools/call 等不带 Mcp-Session-Id 的
+   * JSON-RPC 请求，按每次请求独立的 stateless transport 处理（SDK 官方 stateless
+   * 模式：sessionIdGenerator 为 undefined），请求结束即释放，不维护会话。
+   */
+  private async handleStatelessRequest(req: IncomingMessage, res: ServerResponse, body: unknown, profileId?: string): Promise<void> {
+    const server = this.createConfiguredServer(profileId)
+    if (!server) {
+      res.writeHead(503).end()
+      return
+    }
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined, // stateless 模式
+    })
+    try {
+      await server.connect(transport)
+      await transport.handleRequest(req, res, body)
+    } finally {
+      try { await transport.close() } catch { /* 一次性请求 */ }
+    }
   }
 
   /** 统一工具分发：多工作区固定工具 + 单工作区工具（显式解析 workspace、按仓库权限放行） */

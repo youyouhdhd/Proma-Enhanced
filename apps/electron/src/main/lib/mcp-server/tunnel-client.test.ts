@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'bun:test'
 import { TunnelClientManager, executableName } from './tunnel-client-manager.ts'
 import { OpenAiTunnelClientAdapter, parseVersionOutput, classifyClientFailure } from './tunnel-client-adapter.ts'
+import { parseDoctorChecks } from './tunnel-doctor-parser.ts'
 import type { TunnelManagerDeps } from './tunnel-client-types.ts'
 
 function makeDeps(overrides?: Partial<TunnelManagerDeps>): TunnelManagerDeps & { calls: Array<{ executable: string; args: string[] }> } {
@@ -98,6 +99,45 @@ describe('OpenAiTunnelClientAdapter（CLI 契约）', () => {
     expect(parseVersionOutput('tunnel-client 1.2.3')).toBe('v1.2.3')
     expect(parseVersionOutput('v2.0.0-beta.1')).toBe('v2.0.0-beta.1')
     expect(parseVersionOutput('unknown output')).toBeUndefined()
+  })
+
+  it('TC-V5-KEY-03：control plane API key is required → MISSING_IN_PROCESS，不得误判为权限不足', () => {
+    const failure = classifyClientFailure('CHECK control_plane_api_key FAIL control plane API key is required')
+    expect(failure?.code).toBe('RUNTIME_KEY_MISSING_IN_PROCESS')
+    expect(failure?.code).not.toBe('TUNNEL_PERMISSION_DENIED')
+    expect(failure?.action).toContain('凭据注入')
+  })
+
+  it('TC-V5-KEY-04/05：401 → UNAUTHORIZED；403 → PERMISSION_DENIED', () => {
+    expect(classifyClientFailure('http 401 unauthorized')?.code).toBe('RUNTIME_KEY_UNAUTHORIZED')
+    expect(classifyClientFailure('http 403 forbidden')?.code).toBe('TUNNEL_PERMISSION_DENIED')
+    expect(classifyClientFailure('permission denied for tunnel')?.code).toBe('TUNNEL_PERMISSION_DENIED')
+  })
+
+  it('TC-V5-DOC-02：官方 CHECK 行解析为三态', () => {
+    const parsed = parseDoctorChecks(
+      ['CHECK control_plane_api_key PASS ok', 'CHECK tunnel FAIL not found', 'CHECK mcp_server SKIP later'].join('\n'),
+      '',
+    )
+    expect(parsed).toHaveLength(3)
+    expect(parsed[0]!.state).toBe('pass')
+    expect(parsed[0]!.name).toBe('Runtime API Key')
+    expect(parsed[1]!.state).toBe('fail')
+    expect(parsed[2]!.state).toBe('skipped')
+  })
+
+  it('TC-V5-DOC-01：exit != 0 且无 CHECK 行 → 未验证项 unknown，绝不标绿', () => {
+    const result = adapter.parseDoctor({ exitCode: 2, stdout: 'some text', stderr: '' }, 'v0.0.14')
+    expect(result.ok).toBe(false)
+    const passStates = result.checks.filter((c) => c.state === 'pass')
+    // 只有「OpenAI Tunnel Client」（--version 已验证）允许 pass；其余必须 unknown
+    expect(passStates).toHaveLength(1)
+    expect(passStates[0]!.name).toBe('OpenAI Tunnel Client')
+  })
+
+  it('完整 CLI 校验参数：doctor --help / run --help', () => {
+    expect(adapter.buildDoctorHelpArgs()).toEqual(['doctor', '--help'])
+    expect(adapter.buildRunHelpArgs()).toEqual(['run', '--help'])
   })
 
   it('parseDoctor：退出码 0 → ok；关键词归因到稳定错误码', () => {

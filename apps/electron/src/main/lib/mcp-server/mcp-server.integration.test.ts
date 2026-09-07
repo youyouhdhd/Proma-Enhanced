@@ -77,6 +77,17 @@ afterEach(async () => {
 })
 
 describe('PromaMcpServer 多工作区集成', () => {
+  /** 无状态响应可能是 SSE（event/data 行）或纯 JSON，统一解析出 JSON-RPC payload */
+  async function parseRpcPayload(response: Response): Promise<{ result?: { tools?: Array<{ name: string }>; structuredContent?: Record<string, unknown> } }> {
+    const contentType = response.headers.get('content-type') ?? ''
+    const text = await response.text()
+    if (contentType.includes('text/event-stream')) {
+      const dataLine = text.split(/\r?\n/).reverse().find((line) => line.startsWith('data:'))
+      return dataLine ? JSON.parse(dataLine.slice(5).trim()) : {}
+    }
+    return JSON.parse(text)
+  }
+
   it('tools/list 暴露固定多工作区工具集，read 工具带 readOnlyHint 注解', async () => {
     const root = makeRoot('a')
     writeFileSync(join(root, 'package.json'), '{"name":"demo"}')
@@ -283,5 +294,35 @@ describe('PromaMcpServer 多工作区集成', () => {
     const denied = await clientWork.callTool({ name: 'read_file', arguments: { workspace_id: 'ws_b', path: 'b.txt' } })
     expect(denied.isError).toBe(true)
     await clientWork.close()
+  })
+
+  it('TC-V5-MCP-01：无 Session ID 的现代 tools/list 直接返回工具列表（不当作 initialize）', async () => {
+    const root = makeRoot('l')
+    writeFileSync(join(root, 'a.txt'), 'AAA')
+    const endpoint = await startServer([workspaceEntry('agent-a', 'ws_a', { read: true, write: false, shell: false })], new Map([['ws_a', root]]))
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    })
+    expect(response.status).toBe(200)
+    const payload = await parseRpcPayload(response) as { result?: { tools?: Array<{ name: string }> } }
+    const names = (payload.result?.tools ?? []).map((t) => t.name)
+    expect(names).toContain('workspace_list')
+    expect(names).toContain('read_file')
+  })
+
+  it('TC-V5-MCP-01b：无 Session ID 的 tools/call（workspace_list）同样可用', async () => {
+    const root = makeRoot('m')
+    writeFileSync(join(root, 'a.txt'), 'AAA')
+    const endpoint = await startServer([workspaceEntry('agent-a', 'ws_a', { read: true, write: false, shell: false })], new Map([['ws_a', root]]))
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'workspace_list', arguments: {} } }),
+    })
+    expect(response.status).toBe(200)
+    const payload = await parseRpcPayload(response) as { result?: { structuredContent?: { workspaces?: unknown[] } } }
+    expect(payload.result?.structuredContent?.workspaces).toHaveLength(1)
   })
 })

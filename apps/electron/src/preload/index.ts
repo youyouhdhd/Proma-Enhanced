@@ -390,6 +390,9 @@ export interface ElectronAPI {
   /** 运行 doctor 诊断（结构化结果；技术详情在 technical 字段） */
   runMcpTunnelDoctor: () => Promise<import('@proma/shared').PromaMcpTunnelDoctorResult>
 
+  /** ChatGPT Connector 创建失败时的端到端诊断（逐层检查 + CASE A/B/C 结论） */
+  diagnoseMcpConnector: () => Promise<import('@proma/shared').PromaMcpConnectorDiagnosis>
+
   /** 订阅 Tunnel 生命周期状态推送（phase 全程变化都会推送） */
   onMcpTunnelStateChanged: (callback: (state: import('@proma/shared').PromaMcpTunnelState) => void) => () => void
 
@@ -1465,7 +1468,7 @@ export interface ElectronAPI {
  * 实现 ElectronAPI 接口
  */
 const electronAPI: ElectronAPI = {
-  bridgeVersion: 3,
+  bridgeVersion: 5,
 
   // 运行时
   getRuntimeStatus: () => {
@@ -1736,6 +1739,10 @@ const electronAPI: ElectronAPI = {
 
   runMcpTunnelDoctor: () => {
     return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.RUN_DOCTOR)
+  },
+
+  diagnoseMcpConnector: () => {
+    return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.DIAGNOSE_CONNECTOR)
   },
 
   onMcpTunnelStateChanged: (callback: (state: import('@proma/shared').PromaMcpTunnelState) => void) => {

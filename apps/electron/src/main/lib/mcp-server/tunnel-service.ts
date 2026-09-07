@@ -14,13 +14,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import type { PromaMcpTunnelDetection, PromaMcpTunnelDoctorResult, PromaMcpTunnelPhase, PromaMcpTunnelSettings, PromaMcpTunnelState } from '@proma/shared'
+import type { PromaMcpConnectorDiagnosis, PromaMcpTunnelDetection, PromaMcpTunnelDoctorResult, PromaMcpTunnelPhase, PromaMcpTunnelSettings, PromaMcpTunnelState } from '@proma/shared'
 import { getSettings, updateSettings } from '../settings-service'
 import { getConfigDir } from '../config-paths'
 import { promaMcpServerService } from './service'
 import { TunnelClientManager } from './tunnel-client-manager'
 import { TunnelClientInstaller } from './tunnel-client-installer'
 import { classifyClientFailure, openAiTunnelClientAdapter } from './tunnel-client-adapter'
+import { TunnelProcessRunner } from './tunnel-process-runner'
 import type { TunnelRuntimeConfig } from './tunnel-client-types'
 
 const READY_POLL_INTERVAL_MS = 1_000
@@ -49,6 +50,7 @@ class McpTunnelService {
   private readonly manager = new TunnelClientManager({ configDir: () => getConfigDir() })
   private readonly installer = new TunnelClientInstaller(this.manager, { configDir: () => getConfigDir() })
   private readonly adapter = openAiTunnelClientAdapter
+  private readonly runner = new TunnelProcessRunner()
 
   onStateChanged(listener: (state: PromaMcpTunnelState) => void): () => void {
     this.listeners.add(listener)
@@ -238,10 +240,10 @@ class McpTunnelService {
       healthListenAddr: '127.0.0.1:0',
       healthUrlFile: this.healthUrlFile,
     }
-    const args = this.adapter.buildRunArgs(runtime)
+      const args = this.adapter.buildRunArgs(runtime)
     try {
       const child = spawn(detection.path, args, {
-        env: { ...process.env, CONTROL_PLANE_API_KEY: runtimeKey },
+        env: this.runner.buildTunnelClientEnv(runtimeKey),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         // shell 必须为 false：Windows 不经 cmd.exe（§12/§14）
@@ -277,7 +279,7 @@ class McpTunnelService {
           wasRunning
             ? '安全连接已断开（OpenAI Tunnel Client 退出，code ' + code + '）。可重新连接。'
             : (failure?.title ?? 'OpenAI Tunnel Client 提前退出（code ' + code + '）。可运行诊断查看原因。'),
-          '重新连接或运行诊断',
+          failure?.action ?? '重新连接或运行诊断',
         )
       })
     } catch (error) {
@@ -354,8 +356,24 @@ class McpTunnelService {
     if ('error' in resolved) {
       return {
         ok: false,
-        checks: [{ name: 'OpenAI Tunnel Client', ok: false, message: resolved.error }],
+        checks: [{ name: 'OpenAI Tunnel Client', state: 'fail', ok: false, message: resolved.error }],
         technical: { stdout: '', stderr: '' },
+      }
+    }
+    // TC-V5-KEY-01：Key 未配置时不启动 Doctor 子进程，直接返回明确诊断
+    const runtimeKey = this.readRuntimeKey()
+    if (!runtimeKey) {
+      return {
+        ok: false,
+        checks: [
+          { name: 'OpenAI Tunnel Client', state: 'pass', ok: true, ...(resolved.version ? { message: resolved.version } : {}) },
+          { name: 'Runtime API Key', state: 'fail', ok: false, message: '尚未保存 Runtime API Key。请先完成步骤 5。' },
+          { name: 'Tunnel 配置', state: 'unknown', ok: false, message: '未完成验证' },
+          { name: 'OpenAI 网络', state: 'unknown', ok: false, message: '未完成验证' },
+          { name: 'PROMA MCP', state: 'unknown', ok: false, message: '未完成完整 Tunnel 验证' },
+          { name: 'Secure Tunnel Ready', state: 'unknown', ok: false, message: '未完成完整 Tunnel 验证' },
+        ],
+        technical: { stdout: '', stderr: '', ...(resolved.version ? { version: resolved.version } : {}) },
       }
     }
     const mcpStatus = promaMcpServerService.getStatus()
@@ -365,18 +383,116 @@ class McpTunnelService {
       healthListenAddr: '127.0.0.1:0',
       healthUrlFile: join(tmpdir(), 'proma-tunnel-doctor-' + Date.now() + '.txt'),
     }
-    const result = await new Promise<{ exitCode?: number; stdout: string; stderr: string }>((resolve) => {
-      const child = spawn(resolved.path, this.adapter.buildDoctorArgs(runtime), { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
-      const outDecoder = new StringDecoder('utf8')
-      const errDecoder = new StringDecoder('utf8')
-      let out = ''
-      let err = ''
-      child.stdout?.on('data', (chunk: Buffer) => { out += outDecoder.write(chunk) })
-      child.stderr?.on('data', (chunk: Buffer) => { err += errDecoder.write(chunk) })
-      child.on('error', (err2) => resolve({ exitCode: -1, stdout: out, stderr: err + err2.message }))
-      child.on('close', (code) => resolve({ exitCode: code ?? undefined, stdout: out, stderr: err }))
-    })
+    // V5 §4：doctor 与 run 使用同一个 buildTunnelClientEnv——Key 只经环境变量注入
+    const captured = await this.runner.runCapture(resolved.path, this.adapter.buildDoctorArgs(runtime), { runtimeKey, timeoutMs: 120_000 })
+    const result = this.runner.redact(captured, runtimeKey)
     return this.adapter.parseDoctor({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }, resolved.version)
+  }
+
+  /**
+   * ChatGPT Connector 创建失败端到端诊断（V5 §13）：
+   * 逐层验证 本地 MCP → 完整 CLI → Key → Doctor → /readyz → 最近 MCP 请求 →
+   * tools/list 状态，并归类为 CASE A / B / C。
+   */
+  async diagnoseConnector(): Promise<PromaMcpConnectorDiagnosis> {
+    const checks: PromaMcpConnectorDiagnosis['checks'] = []
+    const mcpStatus = promaMcpServerService.getStatus()
+    // 1. Local MCP running
+    checks.push({ name: '本地 PROMA MCP', state: mcpStatus.running ? 'pass' : 'fail', message: mcpStatus.running ? '已运行' : '未运行（请完成步骤 2）' })
+    // 2. Local MCP /health
+    if (mcpStatus.running) {
+      try {
+        const health = await fetch(new URL('/health', mcpStatus.endpoint), { signal: AbortSignal.timeout(2_000) })
+        checks.push({ name: '本地 MCP /health', state: health.ok ? 'pass' : 'fail', message: 'HTTP ' + health.status })
+      } catch (error) {
+        checks.push({ name: '本地 MCP /health', state: 'fail', message: error instanceof Error ? error.message : '无法访问' })
+      }
+    } else {
+      checks.push({ name: '本地 MCP /health', state: 'skipped', message: '本地 MCP 未运行' })
+    }
+    // 3. 完整 tunnel-client CLI
+    const detection = this.manager.detect(this.getConfig())
+    checks.push({
+      name: 'OpenAI Tunnel Client（完整 CLI）',
+      state: detection.installed && detection.executableKind === 'full-cli' ? 'pass' : 'fail',
+      message: detection.installed
+        ? (detection.executableKind === 'full-cli' ? (detection.version ?? '已检测') : '这是 runtime-only 包，需要完整 CLI')
+        : (detection.errorMessage ?? '未安装'),
+    })
+    // 4. Runtime Key
+    const keyConfigured = this.hasRuntimeKey()
+    checks.push({ name: 'Runtime API Key', state: keyConfigured ? 'pass' : 'fail', message: keyConfigured ? '已安全保存' : '尚未保存（请完成步骤 5）' })
+    // 5. Doctor
+    let doctorOk = false
+    if (detection.installed && keyConfigured && mcpStatus.running) {
+      const doctor = await this.doctor()
+      doctorOk = doctor.ok
+      for (const check of doctor.checks) {
+        if (check.state !== 'pass') {
+          checks.push({ name: 'Doctor · ' + check.name, state: check.state, message: check.message })
+        }
+      }
+      checks.push({ name: 'Doctor 诊断', state: doctor.ok ? 'pass' : 'fail', message: doctor.ok ? 'exit 0' : '存在失败项（见上）' })
+    } else {
+      checks.push({ name: 'Doctor 诊断', state: 'skipped', message: '前置条件未满足' })
+    }
+    // 6. /readyz
+    if (this.state.phase === 'connected') {
+      checks.push({ name: 'Secure Tunnel /readyz', state: 'pass', message: 'HTTP 200' })
+    } else if (this.state.healthUrl) {
+      try {
+        const ready = await fetch(new URL('/readyz', this.state.healthUrl), { signal: AbortSignal.timeout(2_000) })
+        checks.push({ name: 'Secure Tunnel /readyz', state: ready.status === 200 ? 'pass' : 'fail', message: 'HTTP ' + ready.status })
+      } catch (error) {
+        checks.push({ name: 'Secure Tunnel /readyz', state: 'fail', message: error instanceof Error ? error.message : '无法访问' })
+      }
+    } else {
+      checks.push({ name: 'Secure Tunnel /readyz', state: 'unknown', message: 'Tunnel 未启动' })
+    }
+    // 7-9. 最近 MCP 请求 / tools/list
+    const fiveMinAgo = Date.now() - 5 * 60 * 1000
+    const recent = mcpStatus.recentRequests.filter((r) => r.at >= fiveMinAgo)
+    checks.push({ name: '最近 5 分钟收到 MCP 请求', state: recent.length > 0 ? 'pass' : 'unknown', message: recent.length > 0 ? recent.length + ' 条' : '未收到任何请求' })
+    const toolsList = recent.filter((r) => r.jsonRpcMethod === 'tools/list')
+    checks.push({ name: 'tools/list 请求', state: toolsList.length > 0 ? (toolsList.some((r) => r.statusCode === 200) ? 'pass' : 'fail') : 'unknown', message: toolsList.length > 0 ? toolsList.map((r) => r.statusCode).join(', ') : '未收到 tools/list' })
+
+    let conclusion: PromaMcpConnectorDiagnosis['conclusion']
+    if (recent.length === 0) {
+      conclusion = {
+        id: 'A',
+        title: 'CASE A：PROMA 没有收到任何 MCP 请求',
+        detail: '问题更可能位于 ChatGPT → Tunnel 段：请确认 ChatGPT 的 App 选择的是同一个 Tunnel、Workspace 绑定正确、Tunnel 用户权限（Tunnels Read + Use）已具备。',
+        action: '核对 ChatGPT Connector 的 Tunnel 选择，然后重试创建',
+      }
+    } else if (toolsList.length === 0) {
+      conclusion = {
+        id: 'A',
+        title: 'CASE A：收到了请求但没有 tools/list',
+        detail: 'ChatGPT 侧的 discovery 尚未发起 tools/list。请确认 Connector 创建流程走到了「扫描 Tools」一步，然后重试。',
+        action: '在 ChatGPT 重新创建 Connector',
+      }
+    } else if (!toolsList.some((r) => r.statusCode === 200)) {
+      conclusion = {
+        id: 'B',
+        title: 'CASE B：tools/list 返回失败',
+        detail: '问题位于 PROMA MCP 协议 / Tool Schema 层。请展开技术详情查看状态码，并把最近请求反馈给开发者。',
+        action: '重试一次；若持续失败请导出诊断信息',
+      }
+    } else if (!doctorOk) {
+      conclusion = {
+        id: 'C',
+        title: 'CASE C：tools/list 已成功但 Doctor 仍有失败项',
+        detail: 'MCP discovery 正常；请按上方 Doctor 失败项处理（通常是 Runtime Key 权限或网络）。',
+        action: '按 Doctor 失败项提示处理',
+      }
+    } else {
+      conclusion = {
+        id: 'OK',
+        title: '链路各层正常',
+        detail: '本地 MCP、Tunnel Client、Runtime Key、tools/list 均验证通过。若 ChatGPT 仍创建失败，请检查协议版本与 ChatGPT 侧约束，稍后重试。',
+      }
+    }
+    return { generatedAt: Date.now(), checks, conclusion }
   }
 
   // ===== 内部 =====

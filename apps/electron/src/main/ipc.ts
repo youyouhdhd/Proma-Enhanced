@@ -1920,6 +1920,14 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // ChatGPT Connector 创建失败端到端诊断（V5 §13）
+  ipcMain.handle(
+    MCP_TUNNEL_IPC_CHANNELS.DIAGNOSE_CONNECTOR,
+    async (): Promise<import('@proma/shared').PromaMcpConnectorDiagnosis> => {
+      return mcpTunnelService.diagnoseConnector()
+    }
+  )
+
   // 用户显式打开 Codex 授权页面（Renderer 只传 sessionId，不传 URL——§46）
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.CODEX_OAUTH_OPEN_BROWSER,

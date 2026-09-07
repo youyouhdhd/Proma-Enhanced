@@ -125,6 +125,8 @@ export interface PromaMcpServerStatus {
   profileEndpoints: Array<{ id: string; name: string; endpoint: string }>
   /** 最近一次工具调用（供「第一次测试」成功判定展示） */
   lastToolCall?: { name: string; at: number }
+  /** 最近 MCP 请求观测（环形缓冲，设置页展示；V5 §10） */
+  recentRequests: PromaMcpRequestTrace[]
   /** 最近一次错误（启动失败等） */
   errorMessage?: string
 }
@@ -198,6 +200,11 @@ export interface PromaMcpTunnelState {
 /** 程序检测结果（检测按钮 / 安装完成后返回） */
 export interface PromaMcpTunnelDetection {
   installed: boolean
+  /**
+   * 可执行文件类型（V5 §8）：完整 CLI（含 doctor/run 子命令）才能用于诊断与启动；
+   * tunnel-client-runtime.exe 之类的 runtime-only 包会被明确拒绝。
+   */
+  executableKind?: 'full-cli' | 'runtime-only' | 'unknown'
   path?: string
   version?: string
   source?: 'managed' | 'custom' | 'system-path'
@@ -205,11 +212,33 @@ export interface PromaMcpTunnelDetection {
   errorMessage?: string
 }
 
+/** 单个诊断项状态（V5 §6）：exit != 0 时未验证项不得显示绿色 */
+export type PromaMcpDiagnosticState = 'pass' | 'fail' | 'unknown' | 'skipped'
+
 /** Doctor 结构化诊断（技术详情单独放，UI 默认折叠） */
 export interface PromaMcpTunnelDoctorResult {
   ok: boolean
-  checks: Array<{ name: string; ok: boolean; message?: string }>
+  checks: Array<{ name: string; state: PromaMcpDiagnosticState; ok: boolean; message?: string }>
   technical?: { exitCode?: number; stdout?: string; stderr?: string; version?: string; healthUrl?: string }
+}
+
+/** 单条 MCP 请求观测记录（V5 §10；不含任何敏感头 / 参数） */
+export interface PromaMcpRequestTrace {
+  at: number
+  method: string
+  path: string
+  hasSessionId: boolean
+  jsonRpcMethod?: string
+  protocolVersion?: string
+  statusCode: number
+}
+
+/** ChatGPT Connector 创建失败时的端到端诊断（V5 §13） */
+export interface PromaMcpConnectorDiagnosis {
+  generatedAt: number
+  checks: Array<{ name: string; state: PromaMcpDiagnosticState; message?: string }>
+  /** CASE A：ChatGPT→Tunnel 段没有请求到达；CASE B：tools/list 失败（PROMA 协议/schema）；CASE C：tools/list 200 但仍失败 */
+  conclusion?: { id: 'A' | 'B' | 'C' | 'OK'; title: string; detail: string; action?: string }
 }
 
 /** Tunnel 专用 IPC 通道（第三轮起独立于 mcp-server:* 前缀） */
@@ -217,6 +246,7 @@ export const MCP_TUNNEL_IPC_CHANNELS = {
   GET_STATE: 'mcp-tunnel:get-state',
   START: 'mcp-tunnel:start',
   STOP: 'mcp-tunnel:stop',
+  DIAGNOSE_CONNECTOR: 'mcp-tunnel:diagnose-connector',
   SAVE_CONFIG: 'mcp-tunnel:save-config',
   SAVE_RUNTIME_KEY: 'mcp-tunnel:save-runtime-key',
   DETECT: 'mcp-tunnel:detect',

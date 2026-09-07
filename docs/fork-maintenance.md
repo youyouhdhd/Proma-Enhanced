@@ -108,6 +108,15 @@ git fetch upstream --prune
 
 ## 本 Fork 的定制记录
 
+### 第五轮优化（v1.4.0）：Tunnel Runtime/Doctor 修复 + MCP Discovery 兼容
+
+- Doctor 与 Run 统一经 `TunnelProcessRunner.buildTunnelClientEnv()` 注入 `CONTROL_PLANE_API_KEY`（此前 doctor 子进程缺 Key 被误判为权限不足）；进程输出统一脱敏。
+- 错误分类严格区分 `RUNTIME_KEY_MISSING_IN_PROCESS` / `RUNTIME_KEY_UNAUTHORIZED`（401）/ `TUNNEL_PERMISSION_DENIED`（403）/`RUNTIME_KEY_NOT_CONFIGURED`。
+- Doctor 解析官方 `CHECK ... PASS/FAIL/SKIP` 行为三态诊断；exit != 0 时未验证项显示 unknown，不虚构绿色。
+- 程序检测增加 `doctor --help`/`run --help` 校验，区分完整 CLI 与 runtime-only 包。
+- MCP Server 支持无状态现代请求：不带 session 的 POST 按 JSON-RPC method 分流（initialize 走会话，tools/list、tools/call 走 stateless transport）；新增最近 50 条请求观测（`PromaMcpServerStatus.recentRequests`）与设置页展示。
+- 新增 ChatGPT Connector 端到端诊断（CASE A/B/C 归类）与 Runtime Key 权限文案；preload bridgeVersion 升至 5。
+
 ### 第四轮修复（v1.3.1）：MCP 设置页生产白屏 + 渲染层边界
 
 - 根因：MCP 设置页 JSX 引用 `process.platform`，生产渲染层（contextIsolation + nodeIntegration:false、无 polyfill）抛 ReferenceError 导致整页白屏；已改为静态文案（tunnel-client / tunnel-client.exe）。
