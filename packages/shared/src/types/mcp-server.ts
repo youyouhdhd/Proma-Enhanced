@@ -123,6 +123,8 @@ export interface PromaMcpServerStatus {
   workspaces: PromaMcpWorkspaceSummary[]
   /** Profile 端点（仅列出已启用的） */
   profileEndpoints: Array<{ id: string; name: string; endpoint: string }>
+  /** 最近一次工具调用（供「第一次测试」成功判定展示） */
+  lastToolCall?: { name: string; at: number }
   /** 最近一次错误（启动失败等） */
   errorMessage?: string
 }
@@ -136,31 +138,93 @@ export interface PromaMcpToolSummary {
   enabled: boolean
 }
 
-// ===== OpenAI Secure MCP Tunnel =====
+// ===== OpenAI Secure MCP Tunnel（第三轮：Tunnel Client 产品化） =====
+
+/** OpenAI Tunnel Client 的来源模式（不再是任意命令行） */
+export type PromaMcpTunnelClientMode =
+  | 'managed'        // PROMA 自动安装和管理（推荐）
+  | 'custom-path'    // 用户指定的本地可执行文件
+  | 'system-path'    // 由系统 PATH 查找（高级）
 
 /** Tunnel 集成配置（settings.json 的 mcpTunnel 字段） */
 export interface PromaMcpTunnelSettings {
   /** OpenAI Platform 创建的 Tunnel ID，如 tunnel_xxx */
   tunnelId?: string
-  /** tunnel-client 启动命令（默认 "tunnel-client"，可指向自定义路径） */
+  mode: PromaMcpTunnelClientMode
+  /** mode=custom-path 时的本地可执行文件位置（只允许本地文件路径，禁止 URL） */
+  executablePath?: string
+  /** PROMA 启动后自动恢复连接；默认关闭，须用户显式开启 */
+  autoConnect?: boolean
+  /** 已废弃：旧版 clientCommand；读取时一次性迁移到 mode / executablePath */
   clientCommand?: string
 }
 
-export type PromaMcpTunnelStatus =
+/** Tunnel 生命周期阶段（以真实 /readyz 为准，不存在"存活 8 秒 = 已连接"） */
+export type PromaMcpTunnelPhase =
+  | 'not-installed'   // Tunnel Client 未安装
+  | 'needs-config'    // 缺少 Tunnel ID / Runtime Key / 本地 MCP 未运行
+  | 'preflight'       // 检查配置中
+  | 'starting'        // 已启动进程
+  | 'waiting-ready'   // 进程存活，等待 /readyz
+  | 'connected'       // /readyz = 200
+  | 'stopping'
   | 'stopped'
-  | 'starting'
-  | 'running'
   | 'error'
 
-export interface PromaMcpTunnelState {
-  status: PromaMcpTunnelStatus
-  /** tunnel-client 是否可在 PATH/指定路径找到 */
-  clientInstalled: boolean
-  tunnelId?: string
-  pid?: number
-  /** 最近一次错误或退出原因（绝不包含 Runtime API Key） */
-  message?: string
+/** Tunnel Client 程序信息 */
+export interface PromaMcpTunnelClientInfo {
+  installed: boolean
+  version?: string
+  path?: string
+  source?: 'managed' | 'custom' | 'system-path'
+  errorCode?: string
+  errorMessage?: string
 }
+
+/** Tunnel 运行状态（经 mcp-tunnel:state-changed 实时推送给渲染层） */
+export interface PromaMcpTunnelState {
+  phase: PromaMcpTunnelPhase
+  client: PromaMcpTunnelClientInfo
+  localMcpReady: boolean
+  tunnelId?: string
+  runtimeKeyConfigured: boolean
+  healthUrl?: string
+  pid?: number
+  lastConnectedAt?: number
+  /** 面向用户的错误：发生了什么 + 下一步；原始 stderr 放 detail 或走 doctor */
+  error?: { code: string; title: string; detail?: string; action?: string }
+}
+
+/** 程序检测结果（检测按钮 / 安装完成后返回） */
+export interface PromaMcpTunnelDetection {
+  installed: boolean
+  path?: string
+  version?: string
+  source?: 'managed' | 'custom' | 'system-path'
+  errorCode?: string
+  errorMessage?: string
+}
+
+/** Doctor 结构化诊断（技术详情单独放，UI 默认折叠） */
+export interface PromaMcpTunnelDoctorResult {
+  ok: boolean
+  checks: Array<{ name: string; ok: boolean; message?: string }>
+  technical?: { exitCode?: number; stdout?: string; stderr?: string; version?: string; healthUrl?: string }
+}
+
+/** Tunnel 专用 IPC 通道（第三轮起独立于 mcp-server:* 前缀） */
+export const MCP_TUNNEL_IPC_CHANNELS = {
+  GET_STATE: 'mcp-tunnel:get-state',
+  START: 'mcp-tunnel:start',
+  STOP: 'mcp-tunnel:stop',
+  SAVE_CONFIG: 'mcp-tunnel:save-config',
+  SAVE_RUNTIME_KEY: 'mcp-tunnel:save-runtime-key',
+  DETECT: 'mcp-tunnel:detect',
+  INSTALL: 'mcp-tunnel:install',
+  RUN_DOCTOR: 'mcp-tunnel:run-doctor',
+  PICK_EXECUTABLE: 'mcp-tunnel:pick-executable',
+  STATE_CHANGED: 'mcp-tunnel:state-changed',
+} as const
 
 // ===== IPC 通道 =====
 
@@ -170,9 +234,4 @@ export const MCP_SERVER_IPC_CHANNELS = {
   STOP: 'mcp-server:stop',
   UPDATE_CONFIG: 'mcp-server:update-config',
   LIST_TOOLS: 'mcp-server:list-tools',
-  GET_TUNNEL_STATE: 'mcp-server:get-tunnel-state',
-  START_TUNNEL: 'mcp-server:start-tunnel',
-  STOP_TUNNEL: 'mcp-server:stop-tunnel',
-  SAVE_TUNNEL_RUNTIME_KEY: 'mcp-server:save-tunnel-runtime-key',
-  RUN_TUNNEL_DOCTOR: 'mcp-server:run-tunnel-doctor',
 } as const

@@ -53,6 +53,7 @@ function registerProtocolsAndHandlers(): void {
 
 import { getSettings, updateSettings } from './lib/settings-service'
 import { promaMcpServerService } from './lib/mcp-server/service'
+import { mcpTunnelService } from './lib/mcp-server/tunnel-service'
 import { normalizePromaMcpServerConfig } from './lib/mcp-server/config'
 import { handlePromaFileRequest } from './lib/local-file-protocol'
 
@@ -238,6 +239,11 @@ registerBridge({
   shouldAutoStart: () => normalizePromaMcpServerConfig(getSettings().mcpServer).enabled,
   start: async () => {
     await promaMcpServerService.startFromSettings()
+    // 仅当用户显式开启「启动后自动恢复连接」时才自动连接 Tunnel（规范 §24，默认关闭）
+    const tunnelSettings = getSettings().mcpTunnel
+    if (tunnelSettings?.autoConnect && tunnelSettings.tunnelId) {
+      void mcpTunnelService.start()
+    }
   },
   stop: () => {
     void promaMcpServerService.stop()

@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, QUICK_ASK_IPC_CHANNELS, MCP_SERVER_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, QUICK_ASK_IPC_CHANNELS, MCP_SERVER_IPC_CHANNELS, MCP_TUNNEL_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -332,7 +332,10 @@ export interface ElectronAPI {
   getChannelPlanQuota: (channelId: string) => Promise<ChannelPlanQuotaResult>
 
   /** 发起 ChatGPT (Codex) OAuth 登录：立即返回 sessionId，事件经 onCodexOAuthSessionEvent 推送 */
-  codexOAuthStart: (options?: { method?: import('@proma/shared').CodexOAuthLoginMethod; autoOpenBrowser?: boolean }) => Promise<import('@proma/shared').CodexOAuthStartResult>
+  codexOAuthStart: (options?: { method?: import('@proma/shared').CodexOAuthLoginMethod }) => Promise<import('@proma/shared').CodexOAuthStartResult>
+
+  /** 用户显式打开授权页面：Main 按 sessionId 打开当前会话的官方授权地址（可重复调用） */
+  openCodexOAuthBrowser: (sessionId: string) => Promise<import('@proma/shared').CodexOAuthOpenPageResult>
 
   /** 取消进行中的 ChatGPT (Codex) OAuth 登录会话 */
   codexOAuthCancel: (sessionId: string) => Promise<void>
@@ -360,20 +363,35 @@ export interface ElectronAPI {
   /** 列出全部 MCP 工具与启用状态 */
   listMcpServerTools: () => Promise<import('@proma/shared').PromaMcpToolSummary[]>
 
-  /** 获取 OpenAI Secure MCP Tunnel 状态 */
+  /** 获取 OpenAI Secure MCP Tunnel 状态（含 Tunnel Client 检测） */
   getMcpTunnelState: () => Promise<import('@proma/shared').PromaMcpTunnelState>
 
-  /** 启动 Tunnel 安全连接（前置：本地 MCP 运行中 + Tunnel ID + Runtime Key） */
+  /** 检查配置并连接（preflight → run → /readyz；过程经 onMcpTunnelStateChanged 推送） */
   startMcpTunnel: () => Promise<import('@proma/shared').PromaMcpTunnelState>
 
   /** 停止 Tunnel 安全连接 */
   stopMcpTunnel: () => Promise<import('@proma/shared').PromaMcpTunnelState>
 
+  /** 保存 Tunnel 配置（mode / executablePath / autoConnect / tunnelId） */
+  saveMcpTunnelConfig: (config: Partial<import('@proma/shared').PromaMcpTunnelSettings>) => Promise<import('@proma/shared').PromaMcpTunnelState>
+
+  /** 检测 OpenAI Tunnel Client（当前模式解析 + --version 验证） */
+  detectMcpTunnelClient: () => Promise<import('@proma/shared').PromaMcpTunnelDetection>
+
+  /** 安装官方 OpenAI Tunnel Client（managed 模式） */
+  installMcpTunnelClient: () => Promise<import('@proma/shared').PromaMcpTunnelDetection>
+
+  /** 打开文件选择器选择本地 tunnel-client 可执行文件（只返回路径） */
+  pickMcpTunnelExecutable: () => Promise<{ canceled: boolean; path?: string }>
+
   /** 保存 Tunnel Runtime API Key（safeStorage 加密落盘，明文不返回） */
   saveMcpTunnelRuntimeKey: (runtimeKey: string) => Promise<{ success: boolean; message?: string }>
 
-  /** 运行 tunnel-client doctor 诊断 */
-  runMcpTunnelDoctor: () => Promise<{ ok: boolean; output: string }>
+  /** 运行 doctor 诊断（结构化结果；技术详情在 technical 字段） */
+  runMcpTunnelDoctor: () => Promise<import('@proma/shared').PromaMcpTunnelDoctorResult>
+
+  /** 订阅 Tunnel 生命周期状态推送（phase 全程变化都会推送） */
+  onMcpTunnelStateChanged: (callback: (state: import('@proma/shared').PromaMcpTunnelState) => void) => () => void
 
   /** 发起 xAI（Grok/X 订阅）OAuth 登录 */
   xaiOAuthLogin: () => Promise<XaiOAuthLoginResult>
@@ -1635,8 +1653,12 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_PLAN_QUOTA, channelId)
   },
 
-  codexOAuthStart: (options?: { method?: import('@proma/shared').CodexOAuthLoginMethod; autoOpenBrowser?: boolean }) => {
+  codexOAuthStart: (options?: { method?: import('@proma/shared').CodexOAuthLoginMethod }) => {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.CODEX_OAUTH_START, options)
+  },
+
+  openCodexOAuthBrowser: (sessionId: string) => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.CODEX_OAUTH_OPEN_BROWSER, sessionId)
   },
 
   codexOAuthCancel: (sessionId: string) => {
@@ -1676,23 +1698,45 @@ const electronAPI: ElectronAPI = {
   },
 
   getMcpTunnelState: () => {
-    return ipcRenderer.invoke(MCP_SERVER_IPC_CHANNELS.GET_TUNNEL_STATE)
+    return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.GET_STATE)
   },
 
   startMcpTunnel: () => {
-    return ipcRenderer.invoke(MCP_SERVER_IPC_CHANNELS.START_TUNNEL)
+    return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.START)
   },
 
   stopMcpTunnel: () => {
-    return ipcRenderer.invoke(MCP_SERVER_IPC_CHANNELS.STOP_TUNNEL)
+    return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.STOP)
+  },
+
+  saveMcpTunnelConfig: (config: Partial<import('@proma/shared').PromaMcpTunnelSettings>) => {
+    return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.SAVE_CONFIG, config)
+  },
+
+  detectMcpTunnelClient: () => {
+    return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.DETECT)
+  },
+
+  installMcpTunnelClient: () => {
+    return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.INSTALL)
+  },
+
+  pickMcpTunnelExecutable: () => {
+    return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.PICK_EXECUTABLE)
   },
 
   saveMcpTunnelRuntimeKey: (runtimeKey: string) => {
-    return ipcRenderer.invoke(MCP_SERVER_IPC_CHANNELS.SAVE_TUNNEL_RUNTIME_KEY, runtimeKey)
+    return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.SAVE_RUNTIME_KEY, runtimeKey)
   },
 
   runMcpTunnelDoctor: () => {
-    return ipcRenderer.invoke(MCP_SERVER_IPC_CHANNELS.RUN_TUNNEL_DOCTOR)
+    return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.RUN_DOCTOR)
+  },
+
+  onMcpTunnelStateChanged: (callback: (state: import('@proma/shared').PromaMcpTunnelState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: import('@proma/shared').PromaMcpTunnelState) => callback(state)
+    ipcRenderer.on(MCP_TUNNEL_IPC_CHANNELS.STATE_CHANGED, listener)
+    return () => ipcRenderer.removeListener(MCP_TUNNEL_IPC_CHANNELS.STATE_CHANGED, listener)
   },
 
   xaiOAuthLogin: () => {

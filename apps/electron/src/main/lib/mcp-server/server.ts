@@ -50,6 +50,7 @@ export class PromaMcpServer {
   private resolveWorkspaceContext: StartInput['resolveWorkspaceContext'] | null = null
   private registry: LocalToolRegistry | null = null
   private lastError: string | undefined
+  private lastToolCall: { name: string; at: number } | undefined
 
   get running(): boolean {
     return this.httpServer !== null
@@ -117,6 +118,7 @@ export class PromaMcpServer {
       activeSessions: this.sessions.size,
       workspaces: summaries,
       profileEndpoints,
+      ...(this.lastToolCall ? { lastToolCall: this.lastToolCall } : {}),
       ...(this.lastError ? { errorMessage: this.lastError } : {}),
     }
   }
@@ -284,6 +286,7 @@ export class PromaMcpServer {
     if (!definition) {
       return { ok: false, error: { code: 'INVALID_INPUT', message: '未知工具: ' + name } }
     }
+    this.lastToolCall = { name, at: Date.now() }
     const resolved = resolveTargetWorkspace(args.workspace_id, entries)
     if ('error' in resolved) return { ok: false, error: resolved.error }
     const permissionError = assertToolPermission(definition.risk, resolved.entry.permissions)

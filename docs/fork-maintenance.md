@@ -108,6 +108,21 @@ git fetch upstream --prune
 
 ## 本 Fork 的定制记录
 
+### 第三轮优化（v1.3.0）：Tunnel Client 产品化 + Codex 授权显式化
+
+提交范围：`7af3041d`（第二轮收尾）之后的功能版本提交；应用版本 1.2.1 → 1.3.0。
+
+行为边界：
+
+- OpenAI Tunnel Client 升级为三种来源模式（managed / custom-path / system-path），旧 `clientCommand` 配置一次性迁移；任意 Shell 表达式不再执行。
+- Tunnel 进程全部 `shell: false` 直接 spawn；检测必须 `--version` 退出码为 0；stdout/stderr 用 `StringDecoder` 解码，Windows 不再出现代码页乱码。
+- Tunnel readiness 以 `/healthz` → `/readyz` 为准，删除「存活 8 秒 = 已连接」启发式；生命周期 phase 经 `mcp-tunnel:state-changed` 实时推送。
+- 新增 `tunnel-client-adapter / manager / installer / types` 四个模块，CLI 参数统一由 Adapter 构造，Runtime API Key 仍只经 `CONTROL_PLANE_API_KEY` 环境变量注入。
+- ChatGPT Setup 重构为八步向导（三平台分工 + 复制关系表 + 测试提示词 + 最近工具调用显示）。
+- Codex OAuth：「登录」绝不自动打开浏览器；新增 `codex-oauth-open-browser` 专用 IPC（Renderer 只传 sessionId，Main 校验 https 后打开当前会话的官方授权地址）；打开可重复、失败不终止会话；Device Code 同规则；快照移除 `autoOpenBrowser` / `browserOpened`。
+
+涉及区域：`mcp-server/tunnel-*`、`codex-oauth-session-controller`、`ipc.ts`、`preload`、`McpServerSettings.tsx`、`ChannelForm.tsx`、`packages/shared` 契约与测试。
+
 ### 定制提交：自建模型推理档位
 
 提交：`0a19e2643afbcca9eb34b0c052c8ab09b68a8362`

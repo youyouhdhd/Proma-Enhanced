@@ -507,6 +507,8 @@ export const CHANNEL_IPC_CHANNELS = {
   CODEX_OAUTH_CANCEL: 'channel:codex-oauth-cancel',
   /** Codex OAuth 会话事件推送（auth_url / device_code / manual_input_ready / progress / success / error） */
   CODEX_OAUTH_EVENT: 'channel:codex-oauth-event',
+  /** 用户明确点击「在浏览器中打开」：Main 按 sessionId 打开当前会话的官方授权地址（Renderer 不传 URL） */
+  CODEX_OAUTH_OPEN_BROWSER: 'channel:codex-oauth-open-browser',
   /** 渲染进程提交手动授权回调 URL（首次生效，重复提交忽略） */
   CODEX_OAUTH_SUBMIT_CALLBACK: 'channel:codex-oauth-submit-callback',
   /** 发起 xAI（Grok/X 订阅）OAuth 登录 */
@@ -533,7 +535,6 @@ export type CodexOAuthLoginMethod = 'browser' | 'device_code'
  * 避免渲染层因等待最终结果而出现「浏览器先打开、授权链接后出现」的倒置体验。
  */
 export type CodexOAuthStatus =
-  | 'idle'
   | 'starting'
   | 'waiting_authorization'
   | 'exchanging_token'
@@ -541,14 +542,20 @@ export type CodexOAuthStatus =
   | 'error'
   | 'cancelled'
 
-/** Codex OAuth 会话快照（start 的返回值）。 */
+/**
+ * Codex OAuth 会话快照（start 的返回值）。
+ *
+ * 第三轮:移除 autoOpenBrowser / browserOpened——「打开浏览器」不再是会话的
+ * 自动行为或业务限制，而是用户对当前会话的显式动作（openAuthorizationPage，
+ * 可重复点击，只能打开本会话的官方授权地址）。
+ */
 export interface CodexOAuthSessionSnapshot {
   id: string
   status: CodexOAuthStatus
+  method: CodexOAuthLoginMethod
   authUrl?: string
-  autoOpenBrowser: boolean
-  /** 同一会话内 shell.openExternal 最多自动执行一次 */
-  browserOpened: boolean
+  /** device_code 流程的授权信息（QR 码仅在事件推送层附加） */
+  deviceCode?: CodexOAuthDeviceCode
   manualInputReady: boolean
   createdAt: number
   error?: string
@@ -571,6 +578,12 @@ export type CodexOAuthSessionEvent =
   | { sessionId: string; type: 'progress'; message: string }
   | { sessionId: string; type: 'success'; credentials: string; accountId?: string }
   | { sessionId: string; type: 'error'; message: string }
+
+/** 用户显式打开授权页面的结果。打开失败不终止 OAuth 会话。 */
+export interface CodexOAuthOpenPageResult {
+  success: boolean
+  error?: string
+}
 
 /** Pi Codex device-code 登录流程的用户可见信息。 */
 export interface CodexOAuthDeviceCode {

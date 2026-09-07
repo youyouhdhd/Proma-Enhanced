@@ -10,7 +10,7 @@ import { existsSync, realpathSync, readFileSync, writeFileSync, mkdirSync, statS
 import { realpath, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, QUICK_ASK_IPC_CHANNELS, MCP_SERVER_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, MAX_ATTACHMENT_SIZE, isPromaPermissionMode, normalizePathForCompare, removeMcpServerFromConfig, TERMINAL_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, QUICK_ASK_IPC_CHANNELS, MCP_SERVER_IPC_CHANNELS, MCP_TUNNEL_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, PLANNING_CONFLICT_ERROR, MAX_ATTACHMENT_SIZE, isPromaPermissionMode, normalizePathForCompare, removeMcpServerFromConfig, TERMINAL_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, WINDOWS_AGENT_ISLAND_IPC_CHANNELS, TRAY_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -1334,6 +1334,14 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  // Tunnel 生命周期状态实时推送：preflight / starting / waiting-ready / connected /
+  // error / stopped 全部主动广播，渲染层无需手动刷新（规范 §22）。
+  mcpTunnelService.onStateChanged((state) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(MCP_TUNNEL_IPC_CHANNELS.STATE_CHANGED, state)
+    }
+  })
+
   // ===== 本地终端（仅主 renderer 可操作，不能指定可执行文件） =====
   const assertMainTerminalRenderer = (senderId: number): void => {
     const mainWindow = getMainWindow()
@@ -1820,19 +1828,20 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // ===== OpenAI Secure MCP Tunnel（集成官方 tunnel-client） =====
+  // ===== OpenAI Secure MCP Tunnel（第三轮：Tunnel Client 产品化 + 状态推送） =====
 
   // 获取 Tunnel 状态
   ipcMain.handle(
-    MCP_SERVER_IPC_CHANNELS.GET_TUNNEL_STATE,
+    MCP_TUNNEL_IPC_CHANNELS.GET_STATE,
     async (): Promise<import('@proma/shared').PromaMcpTunnelState> => {
+      await mcpTunnelService.detectClient()
       return mcpTunnelService.getState()
     }
   )
 
-  // 启动安全连接（前置校验：本地 MCP 运行中 + Tunnel ID + Runtime Key）
+  // 检查配置并连接（preflight → run → /readyz；结果经状态推送返回）
   ipcMain.handle(
-    MCP_SERVER_IPC_CHANNELS.START_TUNNEL,
+    MCP_TUNNEL_IPC_CHANNELS.START,
     async (): Promise<import('@proma/shared').PromaMcpTunnelState> => {
       return mcpTunnelService.start()
     }
@@ -1840,15 +1849,56 @@ export function registerIpcHandlers(): void {
 
   // 停止安全连接
   ipcMain.handle(
-    MCP_SERVER_IPC_CHANNELS.STOP_TUNNEL,
+    MCP_TUNNEL_IPC_CHANNELS.STOP,
     async (): Promise<import('@proma/shared').PromaMcpTunnelState> => {
       return mcpTunnelService.stop()
     }
   )
 
+  // 保存 Tunnel Client 配置（mode / executablePath / autoConnect / tunnelId）
+  ipcMain.handle(
+    MCP_TUNNEL_IPC_CHANNELS.SAVE_CONFIG,
+    async (_, config: Partial<import('@proma/shared').PromaMcpTunnelSettings>): Promise<import('@proma/shared').PromaMcpTunnelState> => {
+      return mcpTunnelService.saveConfig(config)
+    }
+  )
+
+  // 检测程序（用户点击「检测」或选择文件后）
+  ipcMain.handle(
+    MCP_TUNNEL_IPC_CHANNELS.DETECT,
+    async (): Promise<import('@proma/shared').PromaMcpTunnelDetection> => {
+      return mcpTunnelService.detectClient()
+    }
+  )
+
+  // 安装官方 OpenAI Tunnel Client（managed 模式）
+  ipcMain.handle(
+    MCP_TUNNEL_IPC_CHANNELS.INSTALL,
+    async (): Promise<import('@proma/shared').PromaMcpTunnelDetection> => {
+      return mcpTunnelService.installClient()
+    }
+  )
+
+  // 选择本地可执行文件（只返回路径，不读取内容）
+  ipcMain.handle(
+    MCP_TUNNEL_IPC_CHANNELS.PICK_EXECUTABLE,
+    async (): Promise<{ canceled: boolean; path?: string }> => {
+      const result = await dialog.showOpenDialog({
+        title: '选择 OpenAI Tunnel Client 程序',
+        properties: ['openFile'],
+        filters: [
+          { name: 'OpenAI Tunnel Client', extensions: process.platform === 'win32' ? ['exe'] : ['*'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      })
+      if (result.canceled || result.filePaths.length === 0) return { canceled: true }
+      return { canceled: false, path: result.filePaths[0] }
+    }
+  )
+
   // 保存 Runtime API Key（safeStorage 加密落盘；明文不返回、不记录）
   ipcMain.handle(
-    MCP_SERVER_IPC_CHANNELS.SAVE_TUNNEL_RUNTIME_KEY,
+    MCP_TUNNEL_IPC_CHANNELS.SAVE_RUNTIME_KEY,
     async (_, runtimeKey: string): Promise<{ success: boolean; message?: string }> => {
       try {
         if (typeof runtimeKey !== 'string' || runtimeKey.trim().length === 0) {
@@ -1864,9 +1914,17 @@ export function registerIpcHandlers(): void {
 
   // 运行 tunnel-client doctor 诊断
   ipcMain.handle(
-    MCP_SERVER_IPC_CHANNELS.RUN_TUNNEL_DOCTOR,
-    async (): Promise<{ ok: boolean; output: string }> => {
+    MCP_TUNNEL_IPC_CHANNELS.RUN_DOCTOR,
+    async (): Promise<import('@proma/shared').PromaMcpTunnelDoctorResult> => {
       return mcpTunnelService.doctor()
+    }
+  )
+
+  // 用户显式打开 Codex 授权页面（Renderer 只传 sessionId，不传 URL——§46）
+  ipcMain.handle(
+    CHANNEL_IPC_CHANNELS.CODEX_OAUTH_OPEN_BROWSER,
+    async (_, sessionId: string): Promise<import('@proma/shared').CodexOAuthOpenPageResult> => {
+      return codexOAuthSessionController.openAuthorizationPage(sessionId)
     }
   )
 

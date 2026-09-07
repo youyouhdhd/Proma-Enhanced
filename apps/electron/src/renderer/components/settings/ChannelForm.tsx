@@ -97,10 +97,13 @@ import {
 interface CodexOAuthDialogState {
   status: CodexOAuthStatus
   method: 'browser' | 'device_code'
+  sessionId: string | null
   authUrl: string | null
-  manualInputReady: boolean
   deviceCode: CodexOAuthDeviceCode | null
+  manualInputReady: boolean
   message: string | null
+  /** 「在浏览器中打开」失败提示（不终止会话，规范 §42） */
+  browserOpenError: string | null
 }
 
 interface ChannelFormProps {
@@ -677,8 +680,9 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
     codexAutoCloseRef.current = false
     setTestResult(null)
     setCodexCallbackInput('')
-    setCodexSession({ status: 'starting', method, authUrl: null, manualInputReady: false, deviceCode: null, message: null })
-    void window.electronAPI.codexOAuthStart({ method, autoOpenBrowser: true }).then((result) => {
+    // 登录只负责准备授权信息，绝不自动打开浏览器（第三轮 §38/§44）
+    setCodexSession({ status: 'starting', method, sessionId: null, authUrl: null, manualInputReady: false, deviceCode: null, message: null, browserOpenError: null })
+    void window.electronAPI.codexOAuthStart({ method }).then((result) => {
       if (!result.sessionId || !result.snapshot) {
         toast.error(result.error ?? '启动登录失败，请重试')
         resetCodexSession()
@@ -692,16 +696,45 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
       setCodexSession({
         status: result.snapshot.status,
         method,
+        sessionId: result.sessionId,
         authUrl: result.snapshot.authUrl ?? null,
+        deviceCode: result.snapshot.deviceCode ?? null,
         manualInputReady: result.snapshot.manualInputReady,
-        deviceCode: null,
         message: null,
+        browserOpenError: null,
       })
     }).catch((error) => {
       console.error('[模型配置表单] 启动 ChatGPT 登录失败:', error)
       toast.error('启动登录失败，请重试')
       resetCodexSession()
     })
+  }
+
+  /**
+   * 用户点击「在浏览器中打开」——唯一的浏览器触发点（第三轮 §46）。
+   * URL 由 Main Process 按当前会话解析，Renderer 不传地址；失败不终止会话。
+   */
+  const handleOpenAuthorizationPage = (): void => {
+    const sessionId = codexSession?.sessionId
+    if (!sessionId) return
+    void window.electronAPI.openCodexOAuthBrowser(sessionId).then((result) => {
+      if (result.success) {
+        setCodexSession((s) => (s ? { ...s, browserOpenError: null } : s))
+        toast.success('已在系统浏览器打开授权页面，请完成授权')
+      } else {
+        setCodexSession((s) => (s ? { ...s, browserOpenError: result.error ?? '无法打开系统浏览器' } : s))
+      }
+    })
+  }
+
+  const handleCopyDeviceCode = async (): Promise<void> => {
+    if (!codexSession?.deviceCode) return
+    try {
+      await copyTextToClipboard(codexSession.deviceCode.userCode)
+      toast.success('设备码已复制')
+    } catch {
+      toast.error('复制失败，请手动复制')
+    }
   }
 
   /** 复制授权链接（用户在任意浏览器 / 设备打开均可；不改变会话状态）。 */
@@ -1248,7 +1281,11 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
                         {codexSession.deviceCode ? (
                           <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-2">
                             <div>在任意可访问网络的浏览器中打开链接，并输入设备码：<span className="font-mono font-medium text-foreground">{codexSession.deviceCode.userCode}</span></div>
-                            <a href={codexSession.deviceCode.verificationUri} target="_blank" rel="noreferrer" className="text-primary hover:underline">打开 ChatGPT 授权页面</a>
+                            <div className="flex gap-2">
+                              <Button variant="outline" size="sm" type="button" className="h-7 flex-1" onClick={() => { void navigator.clipboard.writeText(codexSession.deviceCode?.verificationUri ?? ''); toast.success('授权地址已复制') }}>复制授权地址</Button>
+                              <Button variant="outline" size="sm" type="button" className="h-7 flex-1" onClick={() => void handleCopyDeviceCode()}>复制设备码</Button>
+                              <Button variant="outline" size="sm" type="button" className="h-7 flex-1" onClick={handleOpenAuthorizationPage}>在浏览器中打开</Button>
+                            </div>
                             {codexSession.deviceCode.qrCodeData && <img src={codexSession.deviceCode.qrCodeData} alt="ChatGPT 设备码授权二维码" className="h-28 w-28 rounded bg-white p-1" />}
                           </div>
                         ) : codexSession.authUrl ? (
@@ -1257,8 +1294,15 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
                             <div className="max-h-20 overflow-y-auto break-all rounded bg-muted/60 px-2 py-1.5 font-mono text-[11px] text-foreground/80 select-all">{codexSession.authUrl}</div>
                             <div className="flex gap-2">
                               <Button variant="outline" size="sm" type="button" className="h-7 flex-1" onClick={() => void handleCopyCodexAuthUrl()}>复制链接</Button>
-                              <Button variant="outline" size="sm" type="button" className="h-7 flex-1" onClick={() => void window.electronAPI.openExternal(codexSession.authUrl ?? '')}>在浏览器中打开</Button>
+                              <Button variant="outline" size="sm" type="button" className="h-7 flex-1" onClick={handleOpenAuthorizationPage}>在浏览器中打开</Button>
                             </div>
+                            <div className="text-[11px] text-muted-foreground/80">PROMA 不会自动打开浏览器。请选择你希望使用的授权方式（复制后在任意浏览器或设备打开均可）。</div>
+                            {codexSession.browserOpenError && (
+                              <div className="rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+                                {codexSession.browserOpenError}
+                                <Button variant="ghost" size="sm" type="button" className="ml-2 h-5 px-1.5 text-[11px]" onClick={handleOpenAuthorizationPage}>重新尝试打开</Button>
+                              </div>
+                            )}
                             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                               <Loader2 size={12} className="animate-spin" />
                               <span>{codexSession.status === 'exchanging_token' ? '正在完成登录…' : '等待浏览器完成授权'}</span>
