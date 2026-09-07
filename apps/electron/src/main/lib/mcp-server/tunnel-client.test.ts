@@ -5,7 +5,8 @@
 import { describe, expect, it } from 'bun:test'
 import { TunnelClientManager, executableName } from './tunnel-client-manager.ts'
 import { OpenAiTunnelClientAdapter, parseVersionOutput, classifyClientFailure } from './tunnel-client-adapter.ts'
-import { parseDoctorChecks } from './tunnel-doctor-parser.ts'
+import { classifyConnectorConclusion, parseDoctorChecks } from './tunnel-doctor-parser.ts'
+import { TunnelProcessRunner } from './tunnel-process-runner.ts'
 import type { TunnelManagerDeps } from './tunnel-client-types.ts'
 
 function makeDeps(overrides?: Partial<TunnelManagerDeps>): TunnelManagerDeps & { calls: Array<{ executable: string; args: string[] }> } {
@@ -138,6 +139,65 @@ describe('OpenAiTunnelClientAdapter（CLI 契约）', () => {
   it('完整 CLI 校验参数：doctor --help / run --help', () => {
     expect(adapter.buildDoctorHelpArgs()).toEqual(['doctor', '--help'])
     expect(adapter.buildRunHelpArgs()).toEqual(['run', '--help'])
+  })
+
+  it('TC-V6-DOC：doctor 参数含临时健康监听；开启本机认证时注入 extra-headers', () => {
+    const base = { tunnelId: 'tunnel_abc', mcpServerUrl: 'http://127.0.0.1:8787/mcp', healthListenAddr: '127.0.0.1:0', healthUrlFile: 'C:\tmp\d.txt' }
+    const doctorArgs = adapter.buildDoctorArgs(base)
+    expect(doctorArgs.join(' ')).toContain('--health.listen-addr 127.0.0.1:0')
+    expect(doctorArgs.join(' ')).toContain('--health.url-file')
+    expect(doctorArgs.join(' ')).not.toContain('extra-headers')
+    const authedArgs = adapter.buildDoctorArgs({ ...base, localMcpAuth: { type: 'bearer', envVarName: 'PROMA_MCP_AUTH_HEADER' } })
+    expect(authedArgs.join(' ')).toContain('--mcp.extra-headers Authorization: env:PROMA_MCP_AUTH_HEADER')
+    expect(authedArgs.join(' ')).toContain('--mcp.discovery-extra-headers Authorization: env:PROMA_MCP_AUTH_HEADER')
+  })
+
+  it('TC-V6-DOC-PARSER：官方真实 Check ID 正确映射，不再出现虚构 unknown', () => {
+    const officialOutput = [
+      'CHECK config_source            PASS flags/environment only',
+      'CHECK profile_load             PASS flags/environment only',
+      'CHECK tunnel_id                PASS tunnel_abc',
+      'CHECK control_plane_api_key    PASS env:CONTROL_PLANE_API_KEY',
+      'CHECK mcp_target               PASS http://127.0.0.1:47097/mcp',
+      'CHECK mcp_server_reachable     PASS HTTP 401 from http://127.0.0.1:47097/mcp',
+      'CHECK oauth_metadata           PASS OAuth metadata not advertised',
+      'CHECK health_listener          FAIL listen tcp 127.0.0.1:8080 bind conflict',
+      'CHECK ui                       SKIP blocked by health listener check',
+      'CHECK codex_plugin             SKIP not installed',
+      'RESULT fail',
+    ].join('\n')
+    const result = adapter.parseDoctor({ exitCode: 2, stdout: officialOutput, stderr: '' }, 'v0.0.14')
+    const names = result.checks.map((c) => c.name)
+    expect(names).toContain('Tunnel ID')
+    expect(names).toContain('Runtime API Key')
+    expect(names).toContain('PROMA MCP 可达性')
+    expect(names).toContain('Tunnel 本地健康服务')
+    // 不再出现 V5 时期虚构的 Check（TC-V6-DOC-PARSER）
+    expect(names).not.toContain('tunnel')
+    expect(names).not.toContain('control_plane_connection')
+    expect(names).not.toContain('mcp_server')
+    expect(names).not.toContain('secure_tunnel_ready')
+    // health_listener FAIL 是阻断项；codex_plugin SKIP 不阻断
+    expect(result.blockingFailures).toContain('Tunnel 本地健康服务')
+    expect(result.blockingFailures).not.toContain('Codex Tunnel 插件')
+    const codex = result.checks.find((c) => c.name === 'Codex Tunnel 插件')
+    expect(codex?.state).toBe('skipped')
+    expect(result.ok).toBe(false)
+  })
+
+  it('TC-V6-DIAG：Connector 结论归类 A / B-AUTH / B-PROTOCOL / C / OK', () => {
+    expect(classifyConnectorConclusion({ recentCount: 0, allRejected: false, toolsListCount: 0, toolsListOk: false, doctorOk: true })!.id).toBe('A')
+    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: true, toolsListCount: 0, toolsListOk: false, doctorOk: true })!.id).toBe('B-AUTH')
+    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: false, toolsListCount: 2, toolsListOk: false, doctorOk: true })!.id).toBe('B-PROTOCOL')
+    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: false, toolsListCount: 2, toolsListOk: true, doctorOk: false })!.id).toBe('C')
+    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: false, toolsListCount: 2, toolsListOk: true, doctorOk: true })!.id).toBe('OK')
+  })
+
+  it('TC-V6-KEY：runner env 注入 CONTROL_PLANE_API_KEY 与 PROMA_MCP_AUTH_HEADER（不进 argv）', () => {
+    const runner = new TunnelProcessRunner()
+    const env = runner.buildTunnelClientEnv({ runtimeKey: 'rk-1234567890', localMcpBearerToken: 'local-abcdef' })
+    expect(env.CONTROL_PLANE_API_KEY).toBe('rk-1234567890')
+    expect(env.PROMA_MCP_AUTH_HEADER).toBe('Bearer local-abcdef')
   })
 
   it('parseDoctor：退出码 0 → ok；关键词归因到稳定错误码', () => {

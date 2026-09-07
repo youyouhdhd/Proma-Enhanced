@@ -62,7 +62,7 @@ export interface PromaMcpConnectionProfile {
 // ===== 配置 =====
 
 /** MCP Server 认证方式 */
-export type PromaMcpAuthType = 'none' | 'bearer'
+export type PromaMcpAuthType = 'none' | 'bearer' | 'managed-bearer'
 
 /** MCP Server 各工具组开关 */
 export interface PromaMcpServerToolToggles {
@@ -95,6 +95,7 @@ export interface PromaMcpServerConfig {
   tools: PromaMcpServerToolToggles
   auth: {
     type: PromaMcpAuthType
+    /** 仅 bearer（自定义）模式使用；managed-bearer 的 Secret 存 safeStorage，不落 settings */
     token?: string
   }
 }
@@ -190,12 +191,17 @@ export interface PromaMcpTunnelState {
   localMcpReady: boolean
   tunnelId?: string
   runtimeKeyConfigured: boolean
+  /** 凭据健康（V6 §26）：available 才算已安全保存；unreadable 需要重新保存 */
+  runtimeKeyStatus?: PromaMcpRuntimeKeyStatus
   healthUrl?: string
   pid?: number
   lastConnectedAt?: number
   /** 面向用户的错误：发生了什么 + 下一步；原始 stderr 放 detail 或走 doctor */
   error?: { code: string; title: string; detail?: string; action?: string }
 }
+
+/** Runtime API Key 凭据健康状态（V6 §26：文件存在但解密失败 ≠ 可用） */
+export type PromaMcpRuntimeKeyStatus = 'missing' | 'available' | 'unreadable'
 
 /** 程序检测结果（检测按钮 / 安装完成后返回） */
 export interface PromaMcpTunnelDetection {
@@ -219,6 +225,8 @@ export type PromaMcpDiagnosticState = 'pass' | 'fail' | 'unknown' | 'skipped'
 export interface PromaMcpTunnelDoctorResult {
   ok: boolean
   checks: Array<{ name: string; state: PromaMcpDiagnosticState; ok: boolean; message?: string }>
+  /** 阻断 ChatGPT Connector 的失败项（V6 §25：codex_plugin / ui SKIP 不算阻断） */
+  blockingFailures?: string[]
   technical?: { exitCode?: number; stdout?: string; stderr?: string; version?: string; healthUrl?: string }
 }
 
@@ -231,14 +239,18 @@ export interface PromaMcpRequestTrace {
   jsonRpcMethod?: string
   protocolVersion?: string
   statusCode: number
+  /** 本机认证结果（V6 §19）：请求即使被 401/403 拒绝也必须留下观测 */
+  authResult?: 'not-required' | 'accepted' | 'rejected'
 }
 
 /** ChatGPT Connector 创建失败时的端到端诊断（V5 §13） */
 export interface PromaMcpConnectorDiagnosis {
   generatedAt: number
+  /** 诊断窗口起点（V6 §28）：只统计该时间之后的请求，避免历史干扰 */
+  windowStartedAt: number
   checks: Array<{ name: string; state: PromaMcpDiagnosticState; message?: string }>
-  /** CASE A：ChatGPT→Tunnel 段没有请求到达；CASE B：tools/list 失败（PROMA 协议/schema）；CASE C：tools/list 200 但仍失败 */
-  conclusion?: { id: 'A' | 'B' | 'C' | 'OK'; title: string; detail: string; action?: string }
+  /** CASE A：请求未到达；CASE B-AUTH：到达但被本机认证拒绝；CASE B-PROTOCOL：tools/list 失败；CASE C：tools/list 200 */
+  conclusion?: { id: 'A' | 'B-AUTH' | 'B-PROTOCOL' | 'C' | 'OK'; title: string; detail: string; action?: string }
 }
 
 /** Tunnel 专用 IPC 通道（第三轮起独立于 mcp-server:* 前缀） */
@@ -249,6 +261,7 @@ export const MCP_TUNNEL_IPC_CHANNELS = {
   DIAGNOSE_CONNECTOR: 'mcp-tunnel:diagnose-connector',
   SAVE_CONFIG: 'mcp-tunnel:save-config',
   SAVE_RUNTIME_KEY: 'mcp-tunnel:save-runtime-key',
+  CLEAR_RUNTIME_KEY: 'mcp-tunnel:clear-runtime-key',
   DETECT: 'mcp-tunnel:detect',
   INSTALL: 'mcp-tunnel:install',
   RUN_DOCTOR: 'mcp-tunnel:run-doctor',

@@ -30,7 +30,7 @@ function workspaceEntry(agentWorkspaceId: string, id: string, perms: { read: boo
 async function startServer(
   entries: PromaMcpWorkspaceEntry[],
   rootById: Map<string, string>,
-  overrides?: { accessMode?: 'read-only' | 'full' },
+  overrides?: { accessMode?: 'read-only' | 'full'; auth?: { type: 'bearer'; token: string } },
 ): Promise<string> {
   const config: PromaMcpServerConfig = {
     enabled: true,
@@ -40,7 +40,7 @@ async function startServer(
     profiles: [],
     accessMode: overrides?.accessMode ?? 'read-only',
     tools: { fileRead: true, fileWrite: true, search: true, git: true, shell: false },
-    auth: { type: 'none' },
+    auth: overrides?.auth ?? { type: 'none' },
   }
   const server = new PromaMcpServer()
   cleanups.push(() => server.stop())
@@ -54,6 +54,7 @@ async function startServer(
       return { context: { workspaceId: entry.id, rootPath: root }, entry: { id: entry.id, name: entry.agentWorkspaceId, rootPath: root, enabled: true, permissions: entry.permissions } }
     },
     registry: createDefaultLocalToolRegistry(),
+    resolveAuthToken: () => overrides?.auth?.token,
   })
   return status.endpoint
 }
@@ -280,6 +281,7 @@ describe('PromaMcpServer 多工作区集成', () => {
         return { context: { workspaceId: entry.id, rootPath: root }, entry: { id: entry.id, name: entry.agentWorkspaceId, rootPath: root, enabled: true, permissions: entry.permissions } }
       },
       registry: createDefaultLocalToolRegistry(),
+      resolveAuthToken: () => undefined,
     })
     // 默认 endpoint：全部可见
     const clientAll = await connect(status.endpoint)
@@ -324,5 +326,37 @@ describe('PromaMcpServer 多工作区集成', () => {
     expect(response.status).toBe(200)
     const payload = await parseRpcPayload(response) as { result?: { structuredContent?: { workspaces?: unknown[] } } }
     expect(payload.result?.structuredContent?.workspaces).toHaveLength(1)
+  })
+
+  it('TC-V6-AUTH-02：bearer 模式下无 Authorization 的 POST 被 401 拒绝', async () => {
+    const root = makeRoot('n1')
+    writeFileSync(join(root, 'a.txt'), 'AAA')
+    const endpoint = await startServer(
+      [workspaceEntry('agent-a', 'ws_a', { read: true, write: false, shell: false })],
+      new Map([['ws_a', root]]),
+      { auth: { type: 'bearer', token: 'secret-token' } },
+    )
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    })
+    expect(response.status).toBe(401)
+  })
+
+  it('TC-V6-AUTH-03：bearer 模式下携带正确 Authorization 的 stateless tools/list 返回 200', async () => {
+    const root = makeRoot('n2')
+    writeFileSync(join(root, 'a.txt'), 'AAA')
+    const endpoint = await startServer(
+      [workspaceEntry('agent-a', 'ws_a', { read: true, write: false, shell: false })],
+      new Map([['ws_a', root]]),
+      { auth: { type: 'bearer', token: 'secret-token' } },
+    )
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: 'Bearer secret-token' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    })
+    expect(response.status).toBe(200)
   })
 })

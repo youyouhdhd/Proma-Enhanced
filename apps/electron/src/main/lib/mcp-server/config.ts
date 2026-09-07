@@ -108,8 +108,10 @@ export function normalizePromaMcpServerConfig(input: unknown): PromaMcpServerCon
       git: tools.git !== false,
       shell: tools.shell === true,
     },
-    auth: auth.type === 'bearer' && typeof auth.token === 'string' && auth.token.length > 0
-      ? { type: 'bearer', token: auth.token }
-      : { type: 'none' },
+    auth: auth.type === 'managed-bearer'
+      ? { type: 'managed-bearer' }
+      : auth.type === 'bearer' && typeof auth.token === 'string' && auth.token.length > 0
+        ? { type: 'bearer', token: auth.token }
+        : { type: 'none' },
   }
 }

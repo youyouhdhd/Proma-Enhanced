@@ -1923,8 +1923,16 @@ export function registerIpcHandlers(): void {
   // ChatGPT Connector 创建失败端到端诊断（V5 §13）
   ipcMain.handle(
     MCP_TUNNEL_IPC_CHANNELS.DIAGNOSE_CONNECTOR,
-    async (): Promise<import('@proma/shared').PromaMcpConnectorDiagnosis> => {
-      return mcpTunnelService.diagnoseConnector()
+    async (_, windowStartedAt?: number): Promise<import('@proma/shared').PromaMcpConnectorDiagnosis> => {
+      return mcpTunnelService.diagnoseConnector(windowStartedAt)
+    }
+  )
+
+  // 清除已保存的 Runtime API Key（V6 §8，UI 二次确认后调用）
+  ipcMain.handle(
+    MCP_TUNNEL_IPC_CHANNELS.CLEAR_RUNTIME_KEY,
+    async (): Promise<import('@proma/shared').PromaMcpTunnelState> => {
+      return mcpTunnelService.clearRuntimeKey()
     }
   )
 

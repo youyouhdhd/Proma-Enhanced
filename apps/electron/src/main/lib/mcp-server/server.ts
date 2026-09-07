@@ -40,6 +40,8 @@ interface StartInput {
   /** 调用时解析某个 Workspace 的执行上下文（rootPath 每次调用时重新验证） */
   resolveWorkspaceContext(entryId: string): { context: LocalToolContext; entry: WorkspaceDirectoryEntry } | { error: string }
   registry: LocalToolRegistry
+  /** 解析 Local MCP 生效的 Bearer token（managed-bearer → safeStorage；bearer → 配置；none → undefined） */
+  resolveAuthToken(): string | undefined
 }
 
 export class PromaMcpServer {
@@ -48,6 +50,7 @@ export class PromaMcpServer {
   private config: PromaMcpServerConfig | null = null
   private listWorkspaces: (() => WorkspaceDirectoryEntry[]) | null = null
   private resolveWorkspaceContext: StartInput['resolveWorkspaceContext'] | null = null
+  private resolveAuthToken: StartInput['resolveAuthToken'] | null = null
   private registry: LocalToolRegistry | null = null
   private lastError: string | undefined
   private lastToolCall: { name: string; at: number } | undefined
@@ -64,6 +67,7 @@ export class PromaMcpServer {
     this.config = config
     this.listWorkspaces = input.listWorkspaces
     this.resolveWorkspaceContext = input.resolveWorkspaceContext
+    this.resolveAuthToken = input.resolveAuthToken
     this.registry = input.registry
 
     const host = config.host
@@ -180,11 +184,33 @@ export class PromaMcpServer {
       return
     }
 
-    if (!isRequestAuthorized(config.auth, req.headers.authorization)) {
-      res.writeHead(401, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'unauthorized' }))
-      return
-    }
+    // V6 §18/§21：trace 覆盖 /mcp 全路径（含 auth 401/403 拒绝），finally 统一记录。
+    // 顺序：Trace Begin → Scope → Local Auth → Body → Protocol Dispatch → Response → Trace Finish。
+    let statusCode = 200
+    const originalWriteHead = res.writeHead.bind(res)
+    res.writeHead = ((...args: Parameters<typeof originalWriteHead>) => {
+      const status = args[0]
+      if (typeof status === 'number') statusCode = status
+      return originalWriteHead(...args)
+    }) as typeof res.writeHead
+    let authResult: 'not-required' | 'accepted' | 'rejected' = 'not-required'
+    let jsonRpcMethod: string | undefined
+    let protocolVersion: string | undefined
+    const sessionHeader = req.headers['mcp-session-id']
+    const sessionId = typeof sessionHeader === 'string' ? sessionHeader : undefined
+    try {
+      if (config.auth.type !== 'none') {
+        const expectedToken = this.resolveAuthToken?.()
+        if (expectedToken && isRequestAuthorized(config.auth, expectedToken, req.headers.authorization)) {
+          authResult = 'accepted'
+        } else if (!expectedToken) {
+          authResult = 'not-required'
+        } else {
+          res.writeHead(401, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'unauthorized' }))
+          return
+        }
+      }
 
     if (req.method === 'DELETE') {
       const sessionId = req.headers['mcp-session-id']
@@ -197,9 +223,6 @@ export class PromaMcpServer {
       res.writeHead(405, { allow: 'POST, GET, DELETE' }).end()
       return
     }
-
-    const sessionHeader = req.headers['mcp-session-id']
-    const sessionId = typeof sessionHeader === 'string' ? sessionHeader : undefined
 
     if (req.method === 'POST') {
       // V5 §10：在路由层读取并观测请求（只记录 method / path / session 有无 / JSON-RPC
@@ -214,20 +237,11 @@ export class PromaMcpServer {
         return
       }
       const rpcBody = (body && typeof body === 'object' ? body : {}) as { method?: unknown; params?: { protocolVersion?: unknown } }
-      const jsonRpcMethod = typeof rpcBody.method === 'string' ? rpcBody.method : undefined
+      jsonRpcMethod = typeof rpcBody.method === 'string' ? rpcBody.method : undefined
       const headerVersion = req.headers['mcp-protocol-version']
-      const protocolVersion = typeof rpcBody.params?.protocolVersion === 'string'
+      protocolVersion = typeof rpcBody.params?.protocolVersion === 'string'
         ? rpcBody.params.protocolVersion
         : typeof headerVersion === 'string' ? headerVersion : undefined
-      let statusCode = 200
-      const originalWriteHead = res.writeHead.bind(res)
-      res.writeHead = ((...args: Parameters<typeof originalWriteHead>) => {
-        const status = args[0]
-        if (typeof status === 'number') statusCode = status
-        return originalWriteHead(...args)
-      }) as typeof res.writeHead
-
-      try {
         if (!sessionId) {
           // V5 §11：无 Session ID 不再默认当作 initialize——按 JSON-RPC method 分流。
           // initialize 走会话模型（legacy 兼容）；tools/list / tools/call 等现代无状态请求
@@ -247,17 +261,6 @@ export class PromaMcpServer {
             await entry.transport.handleRequest(req, res, body)
           }
         }
-      } finally {
-        this.recordRequest({
-          at: Date.now(),
-          method: 'POST',
-          path: url.split('?')[0] ?? '',
-          hasSessionId: Boolean(sessionId),
-          ...(jsonRpcMethod ? { jsonRpcMethod } : {}),
-          ...(protocolVersion ? { protocolVersion } : {}),
-          statusCode,
-        })
-      }
       return
     }
 
@@ -270,6 +273,18 @@ export class PromaMcpServer {
     }
     this.sessions.touch(sessionId!)
     await entry.transport.handleRequest(req, res, undefined)
+    } finally {
+      this.recordRequest({
+        at: Date.now(),
+        method: req.method ?? '',
+        path: url.split('?')[0] ?? '',
+        hasSessionId: Boolean(sessionId),
+        ...(jsonRpcMethod ? { jsonRpcMethod } : {}),
+        ...(protocolVersion ? { protocolVersion } : {}),
+        statusCode,
+        authResult,
+      })
+    }
   }
 
   /** 构造已接线的 MCP Server 实例（会话模式与无状态模式共用，工具逻辑只有一份） */

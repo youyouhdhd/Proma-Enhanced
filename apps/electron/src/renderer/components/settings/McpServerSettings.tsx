@@ -67,6 +67,8 @@ export function McpServerSettings(): React.ReactElement {
   const [detection, setDetection] = React.useState<PromaMcpTunnelDetection | null>(null)
   const [doctor, setDoctor] = React.useState<PromaMcpTunnelDoctorResult | null>(null)
   const [diagnosis, setDiagnosis] = React.useState<PromaMcpConnectorDiagnosis | null>(null)
+  /** V6 §28：Connector 测试窗口起点——只统计该时间之后的请求 */
+  const [diagnosisWindowStart, setDiagnosisWindowStart] = React.useState<number | null>(null)
   const [autoConnect, setAutoConnect] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
 
@@ -246,7 +248,13 @@ export function McpServerSettings(): React.ReactElement {
   }
 
   const runConnectorDiagnosis = async (): Promise<void> => {
-    setDiagnosis(await window.electronAPI.diagnoseMcpConnector())
+    setDiagnosis(await window.electronAPI.diagnoseMcpConnector(diagnosisWindowStart ?? undefined))
+  }
+
+  /** V6 §28：Connector 测试窗口——只统计该时间之后的请求，避免历史干扰 */
+  const startDiagnosisWindow = (): void => {
+    setDiagnosisWindowStart(Date.now())
+    setDiagnosis(null)
   }
 
   const phase = tunnelPhaseLabel(tunnel)
@@ -395,8 +403,14 @@ export function McpServerSettings(): React.ReactElement {
                     <div className="text-muted-foreground">最近 MCP 请求</div>
                     <div className="mt-0.5 max-h-24 overflow-auto font-mono text-[10px]">
                       {status.recentRequests.slice(-8).reverse().map((trace, index) => (
-                        <div key={trace.at + '-' + index} className={trace.statusCode >= 400 ? 'text-destructive' : 'text-foreground/80'}>
-                          {new Date(trace.at).toLocaleTimeString()} {trace.jsonRpcMethod ?? trace.method} {trace.statusCode}{trace.hasSessionId ? '' : ' (无会话)'}
+                        <div key={trace.at + '-' + index} className={
+                          trace.statusCode === 401 || trace.statusCode === 403 || trace.statusCode >= 500
+                            ? 'text-destructive'
+                            : trace.statusCode >= 400
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-emerald-600 dark:text-emerald-400'
+                        }>
+                          {new Date(trace.at).toLocaleTimeString()} {trace.jsonRpcMethod ?? trace.method} {trace.statusCode}{trace.authResult === 'rejected' ? ' 认证拒绝' : ''}{trace.hasSessionId ? '' : ' (无会话)'}
                         </div>
                       ))}
                     </div>
@@ -428,14 +442,18 @@ export function McpServerSettings(): React.ReactElement {
                   <div className="flex items-center gap-2">
                     <Select
                       value={config.auth.type}
-                      onValueChange={(value) => void applyConfig({ ...config, auth: value === 'bearer' ? { type: 'bearer', token: config.auth.token ?? '' } : { type: 'none' } })}
+                      onValueChange={(value) => void applyConfig({ ...config, auth: value === 'bearer' ? { type: 'bearer', token: config.auth.token ?? '' } : value === 'managed-bearer' ? { type: 'managed-bearer' } : { type: 'none' } })}
                     >
                       <SelectTrigger className="h-8 w-32"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="none">无认证</SelectItem>
-                        <SelectItem value="bearer">Bearer Token</SelectItem>
+                        <SelectItem value="managed-bearer">PROMA 托管（推荐）</SelectItem>
+                        <SelectItem value="none">无认证（仅 localhost）</SelectItem>
+                        <SelectItem value="bearer">自定义 Bearer（高级）</SelectItem>
                       </SelectContent>
                     </Select>
+                    {config.auth.type === 'managed-bearer' && (
+                      <span className="text-[11px] text-muted-foreground">Secret 由 PROMA 生成并存系统加密存储；Tunnel Client 自动携带，无需填入 ChatGPT。</span>
+                    )}
                     {config.auth.type === 'bearer' && (
                       <Input
                         value={config.auth.token ?? ''}
@@ -625,6 +643,16 @@ export function McpServerSettings(): React.ReactElement {
               </div>
             </div>
             {tunnel?.runtimeKeyConfigured && <div className="text-xs text-emerald-600">✓ Runtime API Key 已安全保存</div>}
+            {tunnel?.runtimeKeyStatus === 'unreadable' && (
+              <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                ✕ 已保存的 Runtime API Key 无法读取（系统凭据可能已更换）。请重新保存。
+              </div>
+            )}
+            {tunnel?.runtimeKeyConfigured && (
+              <Button size="sm" variant="ghost" type="button" className="h-7 w-fit" onClick={() => { if (window.confirm('确定清除已保存的 Runtime API Key？清除后需要重新保存才能连接。')) { void window.electronAPI.clearMcpTunnelRuntimeKey().then((s) => setTunnel(s)) } }}>
+                清除已保存的 Runtime API Key
+              </Button>
+            )}
           </div>
         </SettingsCard>
 
@@ -651,6 +679,9 @@ export function McpServerSettings(): React.ReactElement {
                 </Button>
                 <Button size="sm" variant="ghost" type="button" className="h-7" onClick={() => { void runConnectorDiagnosis() }}>
                   连接失败？运行完整诊断
+                </Button>
+                <Button size="sm" variant="ghost" type="button" className="h-7" onClick={startDiagnosisWindow}>
+                  开始一次 Connector 测试
                 </Button>
               </div>
             </div>
@@ -686,7 +717,7 @@ export function McpServerSettings(): React.ReactElement {
                     {check.message && <span className="text-muted-foreground/80">{check.message}</span>}
                   </div>
                 ))}
-                {diagnosis.conclusion && (
+            {diagnosis.conclusion && (
                   <div className={cn('rounded-md px-2 py-1.5', diagnosis.conclusion.id === 'OK' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-amber-500/10 text-amber-700 dark:text-amber-300')}>
                     <div className="font-medium">{diagnosis.conclusion.title}</div>
                     <div className="mt-0.5 leading-relaxed">{diagnosis.conclusion.detail}</div>
@@ -712,6 +743,7 @@ export function McpServerSettings(): React.ReactElement {
               <li>保存 PROMA App</li>
             </ol>
             <p className="text-[11px] text-muted-foreground/80">这里不需要填写：localhost MCP URL、Runtime API Key、Codex 登录凭据。</p>
+            <p className="text-[11px] text-muted-foreground/80">ChatGPT 中的「身份验证」不是 PROMA 本机 Bearer Token。如果 PROMA Local MCP 开启了内部 Bearer 认证，PROMA 会自动让 OpenAI Tunnel Client 在本机转发时携带该凭据；你不需要把这枚 Token 填入 ChatGPT。</p>
             <Button size="sm" variant="outline" type="button" className="h-7" onClick={() => void window.electronAPI.openExternal('https://chatgpt.com')}>
               打开 ChatGPT
             </Button>

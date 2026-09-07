@@ -10,7 +10,7 @@
 
 import type { PromaMcpTunnelDoctorResult } from '@proma/shared'
 import type { TunnelDoctorRaw, TunnelDoctorResult, TunnelRuntimeConfig } from './tunnel-client-types'
-import { buildDoctorChecks, parseDoctorChecks } from './tunnel-doctor-parser'
+import { buildDoctorChecks, computeBlockingFailures, parseDoctorChecks } from './tunnel-doctor-parser'
 
 export interface TunnelClientAdapter {
   buildVersionArgs(): string[]
@@ -115,6 +115,14 @@ export class OpenAiTunnelClientAdapter implements TunnelClientAdapter {
       'doctor',
       '--control-plane.tunnel-id', input.tunnelId,
       '--mcp.server-url', input.mcpServerUrl,
+      // V6 §9/§16：doctor 与 run 使用相同的临时健康监听（127.0.0.1:0），避免 8080 冲突
+      '--health.listen-addr', input.healthListenAddr,
+      '--health.url-file', input.healthUrlFile,
+      // V6 §14/§16：Local MCP 本机认证经 env 引用注入（doctor 同样需要）
+      ...(input.localMcpAuth ? [
+        '--mcp.extra-headers', 'Authorization: env:' + input.localMcpAuth.envVarName,
+        '--mcp.discovery-extra-headers', 'Authorization: env:' + input.localMcpAuth.envVarName,
+      ] : []),
     ]
   }
 
@@ -125,6 +133,10 @@ export class OpenAiTunnelClientAdapter implements TunnelClientAdapter {
       '--mcp.server-url', input.mcpServerUrl,
       '--health.listen-addr', input.healthListenAddr,
       '--health.url-file', input.healthUrlFile,
+      ...(input.localMcpAuth ? [
+        '--mcp.extra-headers', 'Authorization: env:' + input.localMcpAuth.envVarName,
+        '--mcp.discovery-extra-headers', 'Authorization: env:' + input.localMcpAuth.envVarName,
+      ] : []),
     ]
   }
 
@@ -137,17 +149,16 @@ export class OpenAiTunnelClientAdapter implements TunnelClientAdapter {
     const failure = classifyClientFailure(combined)
     const parsed = parseDoctorChecks(raw.stdout, raw.stderr)
     // 已知失败关键词映射到对应检查项（v5 §5/§6）
-    const knownFailures: Array<{ name: string; message?: string }> = []
+    const knownFailures: Array<{ rawName: string; message?: string }> = []
     if (failure?.code === TUNNEL_FAILURE_CODES.RUNTIME_KEY_MISSING_IN_PROCESS || failure?.code === TUNNEL_FAILURE_CODES.RUNTIME_KEY_UNAUTHORIZED || failure?.code === TUNNEL_FAILURE_CODES.TUNNEL_PERMISSION_DENIED) {
-      knownFailures.push({ name: 'control_plane_api_key', message: failure.title })
-    }
-    if (failure?.code === TUNNEL_FAILURE_CODES.NETWORK_UNREACHABLE) {
-      knownFailures.push({ name: 'control_plane_connection', message: failure.title })
+      knownFailures.push({ rawName: 'control_plane_api_key', message: failure.title })
     }
     const checks = buildDoctorChecks(parsed, raw.exitCode, knownFailures, version)
+    const blockingFailures = computeBlockingFailures(parsed, knownFailures)
     return {
       ok: raw.exitCode === 0,
       checks,
+      blockingFailures,
       technical: { exitCode: raw.exitCode, stdout: raw.stdout.slice(0, 8000), stderr: raw.stderr.slice(0, 4000), ...(version ? { version } : {}) },
     }
   }

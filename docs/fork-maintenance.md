@@ -108,6 +108,13 @@ git fetch upstream --prune
 
 ## 本 Fork 的定制记录
 
+### 第六轮修复（v1.5.0）：凭据状态派生 + Doctor 对齐官方 Check + Local MCP Auth 转发
+
+- Runtime Key 状态改为派生快照（safeStorage 为事实来源），保存后回读验证并实时推送；新增凭据健康三态（unreadable 不显示绿色）与清除入口。
+- Doctor 改用 `127.0.0.1:0` 临时健康监听（修复 8080 冲突假失败）；Parser 对齐官方真实 Check ID，删除虚构期望项；`codex_plugin/ui SKIP` 不阻断 Connector；新增 `blockingFailures`。
+- Local MCP 认证新增 `managed-bearer`（Secret 存 safeStorage，settings 不落明文，旧 bearer 自动迁移）；tunnel-client 经 `PROMA_MCP_AUTH_HEADER` env + `--mcp.extra-headers / --mcp.discovery-extra-headers` 自动转发本机凭据（doctor/run 一致，Secret 不进 argv）。
+- 请求观测覆盖 401/403 拒绝（`authResult`）；Connector 诊断新增 CASE B-AUTH 与「开始一次 Connector 测试」窗口；bridgeVersion 升至 6。
+
 ### 第五轮优化（v1.4.0）：Tunnel Runtime/Doctor 修复 + MCP Discovery 兼容
 
 - Doctor 与 Run 统一经 `TunnelProcessRunner.buildTunnelClientEnv()` 注入 `CONTROL_PLANE_API_KEY`（此前 doctor 子进程缺 Key 被误判为权限不足）；进程输出统一脱敏。

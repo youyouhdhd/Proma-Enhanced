@@ -10,7 +10,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
@@ -22,6 +22,7 @@ import { TunnelClientManager } from './tunnel-client-manager'
 import { TunnelClientInstaller } from './tunnel-client-installer'
 import { classifyClientFailure, openAiTunnelClientAdapter } from './tunnel-client-adapter'
 import { TunnelProcessRunner } from './tunnel-process-runner'
+import { classifyConnectorConclusion } from './tunnel-doctor-parser'
 import type { TunnelRuntimeConfig } from './tunnel-client-types'
 
 const READY_POLL_INTERVAL_MS = 1_000
@@ -137,10 +138,30 @@ class McpTunnelService {
     }
     const configDir = getConfigDir()
     writeFileSync(join(configDir, 'mcp-tunnel-key'), safeStorage.encryptString(trimmed).toString('base64'), 'utf-8')
+    // V6 §7：写入后回读验证（roundtrip 绝不打日志），凭据状态以存储为事实来源
+    const roundTrip = this.readRuntimeKey()
+    if (roundTrip !== trimmed) {
+      throw new Error('Runtime API Key 保存验证失败')
+    }
+    this.emit()
   }
 
   hasRuntimeKey(): boolean {
     return existsSync(join(getConfigDir(), 'mcp-tunnel-key'))
+  }
+
+  /** V6 §8：清除已保存的 Runtime API Key（UI 二次确认后调用），状态立即派生刷新 */
+  clearRuntimeKey(): PromaMcpTunnelState {
+    const keyPath = join(getConfigDir(), 'mcp-tunnel-key')
+    if (existsSync(keyPath)) unlinkSync(keyPath)
+    this.emit()
+    return this.getState()
+  }
+
+  /** V6 §26：凭据健康三态（文件存在但解密失败 = unreadable，不得显示绿色） */
+  getRuntimeKeyStatus(): 'missing' | 'available' | 'unreadable' {
+    if (!this.hasRuntimeKey()) return 'missing'
+    return this.readRuntimeKey() !== undefined ? 'available' : 'unreadable'
   }
 
   private readRuntimeKey(): string | undefined {
@@ -159,7 +180,21 @@ class McpTunnelService {
   // ===== 状态 =====
 
   getState(): PromaMcpTunnelState {
-    return this.state
+    return this.buildStateSnapshot()
+  }
+
+  /**
+   * V6 §6：状态快照派生——runtimeKeyConfigured / runtimeKeyStatus / localMcpReady
+   * 以凭据存储与 MCP Server 实际状态为事实来源，不再依赖散落赋值。
+   */
+  private buildStateSnapshot(): PromaMcpTunnelState {
+    const keyStatus = this.getRuntimeKeyStatus()
+    return {
+      ...this.state,
+      runtimeKeyConfigured: keyStatus === 'available',
+      runtimeKeyStatus: keyStatus,
+      localMcpReady: promaMcpServerService.getStatus().running,
+    }
   }
 
   /** 刷新当前 client 检测结果（GET_STATE / 检测按钮） */
@@ -240,10 +275,15 @@ class McpTunnelService {
       healthListenAddr: '127.0.0.1:0',
       healthUrlFile: this.healthUrlFile,
     }
-      const args = this.adapter.buildRunArgs(runtime)
+    // V6 §14：Local MCP 本机认证 → tunnel-client 经 env 引用注入 Authorization（doctor/run 一致）
+    const localToken = promaMcpServerService.getLocalMcpAuthToken()
+    if (localToken) {
+      runtime.localMcpAuth = { type: 'bearer', envVarName: 'PROMA_MCP_AUTH_HEADER' }
+    }
+    const args = this.adapter.buildRunArgs(runtime)
     try {
       const child = spawn(detection.path, args, {
-        env: this.runner.buildTunnelClientEnv(runtimeKey),
+        env: this.runner.buildTunnelClientEnv({ runtimeKey, ...(localToken ? { localMcpBearerToken: localToken } : {}) }),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         // shell 必须为 false：Windows 不经 cmd.exe（§12/§14）
@@ -377,16 +417,28 @@ class McpTunnelService {
       }
     }
     const mcpStatus = promaMcpServerService.getStatus()
+    // V6 §14/§16：Local MCP 开启本机认证时，doctor 与 run 注入同一凭据
+    const localToken = promaMcpServerService.getLocalMcpAuthToken()
     const runtime: TunnelRuntimeConfig = {
       tunnelId: settings.tunnelId ?? '',
       mcpServerUrl: mcpStatus.endpoint || 'http://127.0.0.1:0/mcp',
       healthListenAddr: '127.0.0.1:0',
       healthUrlFile: join(tmpdir(), 'proma-tunnel-doctor-' + Date.now() + '.txt'),
+      ...(localToken ? { localMcpAuth: { type: 'bearer' as const, envVarName: 'PROMA_MCP_AUTH_HEADER' } } : {}),
     }
-    // V5 §4：doctor 与 run 使用同一个 buildTunnelClientEnv——Key 只经环境变量注入
-    const captured = await this.runner.runCapture(resolved.path, this.adapter.buildDoctorArgs(runtime), { runtimeKey, timeoutMs: 120_000 })
-    const result = this.runner.redact(captured, runtimeKey)
-    return this.adapter.parseDoctor({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }, resolved.version)
+    try {
+      // V5 §4：doctor 与 run 使用同一个 buildTunnelClientEnv——凭据只经环境变量注入
+      const captured = await this.runner.runCapture(resolved.path, this.adapter.buildDoctorArgs(runtime), {
+        runtimeKey,
+        ...(localToken ? { localMcpBearerToken: localToken } : {}),
+        timeoutMs: 120_000,
+      })
+      const result = this.runner.redact(captured, runtimeKey, localToken)
+      return this.adapter.parseDoctor({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }, resolved.version)
+    } finally {
+      // V6 §9：Doctor 临时文件成功 / 失败 / 超时 / spawn error 都要清理
+      try { if (existsSync(runtime.healthUrlFile)) unlinkSync(runtime.healthUrlFile) } catch { /* 清理失败不影响诊断 */ }
+    }
   }
 
   /**
@@ -394,7 +446,7 @@ class McpTunnelService {
    * 逐层验证 本地 MCP → 完整 CLI → Key → Doctor → /readyz → 最近 MCP 请求 →
    * tools/list 状态，并归类为 CASE A / B / C。
    */
-  async diagnoseConnector(): Promise<PromaMcpConnectorDiagnosis> {
+  async diagnoseConnector(windowStartedAt?: number): Promise<PromaMcpConnectorDiagnosis> {
     const checks: PromaMcpConnectorDiagnosis['checks'] = []
     const mcpStatus = promaMcpServerService.getStatus()
     // 1. Local MCP running
@@ -424,9 +476,13 @@ class McpTunnelService {
     checks.push({ name: 'Runtime API Key', state: keyConfigured ? 'pass' : 'fail', message: keyConfigured ? '已安全保存' : '尚未保存（请完成步骤 5）' })
     // 5. Doctor
     let doctorOk = false
+    let doctorMcpReachableMessage: string | undefined
     if (detection.installed && keyConfigured && mcpStatus.running) {
       const doctor = await this.doctor()
-      doctorOk = doctor.ok
+      // V6 §25：阻断 Connector 的是关键检查失败（codex_plugin / ui SKIP 不算）
+      doctorOk = doctor.ok && (doctor.blockingFailures?.length ?? 0) === 0
+      const reachable = doctor.checks.find((c) => c.name === 'PROMA MCP 可达性')
+      doctorMcpReachableMessage = reachable?.message
       for (const check of doctor.checks) {
         if (check.state !== 'pass') {
           checks.push({ name: 'Doctor · ' + check.name, state: check.state, message: check.message })
@@ -450,49 +506,30 @@ class McpTunnelService {
       checks.push({ name: 'Secure Tunnel /readyz', state: 'unknown', message: 'Tunnel 未启动' })
     }
     // 7-9. 最近 MCP 请求 / tools/list
-    const fiveMinAgo = Date.now() - 5 * 60 * 1000
-    const recent = mcpStatus.recentRequests.filter((r) => r.at >= fiveMinAgo)
-    checks.push({ name: '最近 5 分钟收到 MCP 请求', state: recent.length > 0 ? 'pass' : 'unknown', message: recent.length > 0 ? recent.length + ' 条' : '未收到任何请求' })
+    const windowStart = windowStartedAt ?? (Date.now() - 5 * 60 * 1000)
+    const recent = mcpStatus.recentRequests.filter((r) => r.at >= windowStart)
+    checks.push({ name: '诊断窗口内收到 MCP 请求', state: recent.length > 0 ? 'pass' : 'unknown', message: recent.length > 0 ? recent.length + ' 条' : '未收到任何请求' })
     const toolsList = recent.filter((r) => r.jsonRpcMethod === 'tools/list')
     checks.push({ name: 'tools/list 请求', state: toolsList.length > 0 ? (toolsList.some((r) => r.statusCode === 200) ? 'pass' : 'fail') : 'unknown', message: toolsList.length > 0 ? toolsList.map((r) => r.statusCode).join(', ') : '未收到 tools/list' })
 
-    let conclusion: PromaMcpConnectorDiagnosis['conclusion']
-    if (recent.length === 0) {
-      conclusion = {
-        id: 'A',
-        title: 'CASE A：PROMA 没有收到任何 MCP 请求',
-        detail: '问题更可能位于 ChatGPT → Tunnel 段：请确认 ChatGPT 的 App 选择的是同一个 Tunnel、Workspace 绑定正确、Tunnel 用户权限（Tunnels Read + Use）已具备。',
-        action: '核对 ChatGPT Connector 的 Tunnel 选择，然后重试创建',
-      }
-    } else if (toolsList.length === 0) {
-      conclusion = {
-        id: 'A',
-        title: 'CASE A：收到了请求但没有 tools/list',
-        detail: 'ChatGPT 侧的 discovery 尚未发起 tools/list。请确认 Connector 创建流程走到了「扫描 Tools」一步，然后重试。',
-        action: '在 ChatGPT 重新创建 Connector',
-      }
-    } else if (!toolsList.some((r) => r.statusCode === 200)) {
-      conclusion = {
-        id: 'B',
-        title: 'CASE B：tools/list 返回失败',
-        detail: '问题位于 PROMA MCP 协议 / Tool Schema 层。请展开技术详情查看状态码，并把最近请求反馈给开发者。',
-        action: '重试一次；若持续失败请导出诊断信息',
-      }
-    } else if (!doctorOk) {
-      conclusion = {
-        id: 'C',
-        title: 'CASE C：tools/list 已成功但 Doctor 仍有失败项',
-        detail: 'MCP discovery 正常；请按上方 Doctor 失败项处理（通常是 Runtime Key 权限或网络）。',
-        action: '按 Doctor 失败项提示处理',
-      }
-    } else {
-      conclusion = {
-        id: 'OK',
-        title: '链路各层正常',
-        detail: '本地 MCP、Tunnel Client、Runtime Key、tools/list 均验证通过。若 ChatGPT 仍创建失败，请检查协议版本与 ChatGPT 侧约束，稍后重试。',
-      }
+    // V6 §17：HTTP 401/403 是 PROMA 语义错误，不只是「可达」
+    const reachableMessage = doctorMcpReachableMessage ?? ''
+    if (reachableMessage.includes('401')) {
+      checks.push({ name: 'PROMA MCP 内部认证', state: 'fail', message: 'Tunnel Client 已能访问本地 MCP 地址，但 PROMA 返回 HTTP 401：Tunnel Client 没有携带本机凭据或凭据不匹配。' })
+    } else if (reachableMessage.includes('403')) {
+      checks.push({ name: 'PROMA MCP 内部认证', state: 'fail', message: 'PROMA 返回 HTTP 403：本机凭据被拒绝。' })
+    } else if (doctorMcpReachableMessage) {
+      checks.push({ name: 'PROMA MCP 内部认证', state: 'pass', message: promaMcpServerService.getLocalMcpAuthToken() !== undefined ? 'Tunnel Client 已正确携带本机凭据' : '未启用本机认证（localhost-only）' })
     }
-    return { generatedAt: Date.now(), checks, conclusion }
+
+    const conclusion = classifyConnectorConclusion({
+      recentCount: recent.length,
+      allRejected: recent.every((r) => r.authResult === 'rejected' || r.statusCode === 401 || r.statusCode === 403),
+      toolsListCount: toolsList.length,
+      toolsListOk: toolsList.some((r) => r.statusCode === 200),
+      doctorOk,
+    })
+    return { generatedAt: Date.now(), windowStartedAt: windowStart, checks, conclusion }
   }
 
   // ===== 内部 =====
@@ -519,6 +556,8 @@ class McpTunnelService {
   }
 
   private emit(): void {
+    // V6 §6.1：emit 同样使用派生快照，订阅者看到的凭据状态永远是最新事实
+    this.state = this.buildStateSnapshot()
     for (const listener of this.listeners) {
       try { listener(this.state) } catch (err) { console.error('[MCP Tunnel] 状态监听器异常:', err) }
     }

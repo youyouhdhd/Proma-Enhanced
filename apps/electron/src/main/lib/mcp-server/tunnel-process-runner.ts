@@ -37,24 +37,28 @@ export function redactSecrets(text: string, secrets: Array<string | undefined>):
 
 export class TunnelProcessRunner {
   /**
-   * 统一凭据环境：run / doctor / 未来诊断共用（V5 §4）。
-   * Key 只经环境变量注入，绝不进 argv。
+   * 统一凭据环境：run / doctor / 未来诊断共用（V5 §4 / V6 §14）。
+   * Key 与 Local MCP Bearer 只经环境变量注入，绝不进 argv。
    */
-  buildTunnelClientEnv(runtimeKey: string): NodeJS.ProcessEnv {
-    return {
+  buildTunnelClientEnv(input: { runtimeKey: string; localMcpBearerToken?: string }): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
-      CONTROL_PLANE_API_KEY: runtimeKey,
+      CONTROL_PLANE_API_KEY: input.runtimeKey,
     }
+    if (input.localMcpBearerToken) {
+      env.PROMA_MCP_AUTH_HEADER = 'Bearer ' + input.localMcpBearerToken
+    }
+    return env
   }
 
   /** 带超时的单次捕获式运行（--version / doctor / help 校验共用） */
   async runCapture(
     executable: string,
     args: string[],
-    options: { runtimeKey?: string; timeoutMs?: number },
+    options: { runtimeKey?: string; localMcpBearerToken?: string; timeoutMs?: number },
   ): Promise<CapturedProcessResult> {
     const env = options.runtimeKey !== undefined
-      ? this.buildTunnelClientEnv(options.runtimeKey)
+      ? this.buildTunnelClientEnv({ runtimeKey: options.runtimeKey, ...(options.localMcpBearerToken ? { localMcpBearerToken: options.localMcpBearerToken } : {}) })
       : { ...process.env }
     return new Promise<CapturedProcessResult>((resolve) => {
       const child = spawn(executable, args, {
@@ -90,11 +94,11 @@ export class TunnelProcessRunner {
   }
 
   /** 对捕获结果统一脱敏（Runtime Key / 可能出现在输出中的敏感值） */
-  redact(result: CapturedProcessResult, runtimeKey?: string): CapturedProcessResult {
+  redact(result: CapturedProcessResult, runtimeKey?: string, localMcpBearerToken?: string): CapturedProcessResult {
     return {
       exitCode: result.exitCode,
-      stdout: redactSecrets(result.stdout, [runtimeKey, process.env.CONTROL_PLANE_API_KEY]),
-      stderr: redactSecrets(result.stderr, [runtimeKey, process.env.CONTROL_PLANE_API_KEY]),
+      stdout: redactSecrets(result.stdout, [runtimeKey, localMcpBearerToken, process.env.CONTROL_PLANE_API_KEY, process.env.PROMA_MCP_AUTH_HEADER]),
+      stderr: redactSecrets(result.stderr, [runtimeKey, localMcpBearerToken, process.env.CONTROL_PLANE_API_KEY, process.env.PROMA_MCP_AUTH_HEADER]),
     }
   }
 }

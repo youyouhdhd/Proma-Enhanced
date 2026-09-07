@@ -16,6 +16,12 @@ export interface TunnelRuntimeConfig {
   healthListenAddr: string
   /** tunnel-client 把实际健康检查 URL 写入该文件，PROMA 轮询读取 */
   healthUrlFile: string
+  /** V6 §14-§16：Local MCP 开启本机 Bearer 时，tunnel-client 经 env 注入 Authorization（Secret 不进 argv） */
+  localMcpAuth?: {
+    type: 'bearer'
+    /** 固定 PROMA_MCP_AUTH_HEADER */
+    envVarName: string
+  }
 }
 
 /** Doctor 原始结果（Adapter 解析前的中间形态） */
