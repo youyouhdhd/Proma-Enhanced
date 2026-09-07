@@ -18,6 +18,7 @@ import { SlackSettings } from './SlackSettings'
 import { DingTalkSettings } from './DingTalkSettings'
 import { WeChatSettings } from './WeChatSettings'
 import { McpServerSettings } from './McpServerSettings'
+import { McpServerSettingsErrorBoundary } from './McpServerSettingsErrorBoundary'
 import { BotDefaultSettings } from './BotDefaultSettings'
 import { PromaLogoSettings } from './PromaLogoSettings'
 import feishuLogo from '@/assets/bots/feishu.png'
@@ -190,7 +191,11 @@ function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
     case 'wechat':
       return <WeChatSettings />
     case 'mcp-server':
-      return <McpServerSettings />
+      return (
+        <McpServerSettingsErrorBoundary>
+          <McpServerSettings />
+        </McpServerSettingsErrorBoundary>
+      )
     case 'defaults':
       return <BotDefaultSettings />
     case 'logos':

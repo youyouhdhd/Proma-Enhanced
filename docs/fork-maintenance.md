@@ -108,6 +108,12 @@ git fetch upstream --prune
 
 ## 本 Fork 的定制记录
 
+### 第四轮修复（v1.3.1）：MCP 设置页生产白屏 + 渲染层边界
+
+- 根因：MCP 设置页 JSX 引用 `process.platform`，生产渲染层（contextIsolation + nodeIntegration:false、无 polyfill）抛 ReferenceError 导致整页白屏；已改为静态文案（tunnel-client / tunnel-client.exe）。
+- 防护：新增 `McpServerSettingsErrorBoundary`（BotHub 包裹）、渲染层配置/Tunnel 状态防御 normalize、preload 能力检测与 `bridgeVersion: 3` 版本协商、Tunnel 状态推送降级。
+- 回归：`check:renderer-boundaries`（源码 Node 全局扫描，418 文件零命中）与 `smoke:renderer-dist`（产物未替换调用扫描，780 文件干净）两个脚本入库。
+
 ### 第三轮优化（v1.3.0）：Tunnel Client 产品化 + Codex 授权显式化
 
 提交范围：`7af3041d`（第二轮收尾）之后的功能版本提交；应用版本 1.2.1 → 1.3.0。

@@ -1456,12 +1456,17 @@ export interface ElectronAPI {
   /** Windows: 悬停窗鼠标进入/离开通知主进程 */
   hoverMouseEnter: () => void
   hoverMouseLeave: () => void
+
+  /** Preload 桥接版本：Renderer 据此检测界面与后台组件是否匹配（Renderer 期望 ≥ 3） */
+  bridgeVersion: number
 }
 
 /**
  * 实现 ElectronAPI 接口
  */
 const electronAPI: ElectronAPI = {
+  bridgeVersion: 3,
+
   // 运行时
   getRuntimeStatus: () => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_RUNTIME_STATUS)

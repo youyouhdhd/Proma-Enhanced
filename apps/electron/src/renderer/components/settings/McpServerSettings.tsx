@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SettingsSection } from './primitives/SettingsSection'
 import { SettingsCard } from './primitives/SettingsCard'
+import { DEFAULT_MCP_CONFIG, FALLBACK_TUNNEL_STATE, getMcpApiCapabilities, isBridgeOutdated, normalizeRendererMcpConfig, normalizeTunnelState, REQUIRED_MCP_BRIDGE_VERSION } from './mcp-settings-defense'
 import { cn } from '@/lib/utils'
 
 /** 与主进程 config.ts 相同的 FNV-1a 派生（UI 侧仅用于新条目即时展示 key） */
@@ -25,17 +26,6 @@ function deriveWorkspaceIdLocal(agentWorkspaceId: string): string {
     hash = Math.imul(hash, 0x01000193)
   }
   return 'ws_' + (hash >>> 0).toString(16).padStart(8, '0')
-}
-
-const DEFAULT_CONFIG: PromaMcpServerConfig = {
-  enabled: false,
-  host: '127.0.0.1',
-  port: 'auto',
-  workspaces: [],
-  profiles: [],
-  accessMode: 'read-only',
-  tools: { fileRead: true, fileWrite: false, search: true, git: true, shell: false },
-  auth: { type: 'none' },
 }
 
 function StatusDot({ on, warn }: { on?: boolean; warn?: boolean }): React.ReactElement {
@@ -65,7 +55,7 @@ const MODE_OPTIONS: Array<{ mode: PromaMcpTunnelClientMode; label: string; hint:
 ]
 
 export function McpServerSettings(): React.ReactElement {
-  const [config, setConfig] = React.useState<PromaMcpServerConfig>(DEFAULT_CONFIG)
+  const [config, setConfig] = React.useState<PromaMcpServerConfig>(DEFAULT_MCP_CONFIG)
   const [status, setStatus] = React.useState<PromaMcpServerStatus | null>(null)
   const [tools, setTools] = React.useState<PromaMcpToolSummary[]>([])
   const [workspaces, setWorkspaces] = React.useState<AgentWorkspace[]>([])
@@ -81,23 +71,29 @@ export function McpServerSettings(): React.ReactElement {
 
   const refresh = React.useCallback(async (): Promise<void> => {
     try {
-      const [appSettings, serverStatus, toolSummaries, tunnelState] = await Promise.all([
+      const [appSettings, serverStatus, toolSummaries] = await Promise.all([
         window.electronAPI.getSettings(),
         window.electronAPI.getMcpServerStatus(),
         window.electronAPI.listMcpServerTools(),
-        window.electronAPI.getMcpTunnelState(),
       ])
-      const nextConfig = appSettings.mcpServer ?? DEFAULT_CONFIG
+      // 渲染层防御 normalize（TC-BLANK-04）：workspaces/profiles 缺失不会打崩 JSX
+      const nextConfig = normalizeRendererMcpConfig(appSettings.mcpServer)
       setConfig(nextConfig)
       setStatus(serverStatus)
       setTools(toolSummaries)
-      setTunnel(tunnelState)
       setTunnelMode(appSettings.mcpTunnel?.mode ?? 'managed')
-      setTunnelIdInput(appSettings.mcpTunnel?.tunnelId ?? tunnelState?.tunnelId ?? '')
+      setTunnelIdInput(appSettings.mcpTunnel?.tunnelId ?? '')
       setCustomPathInput(appSettings.mcpTunnel?.executablePath ?? '')
       setAutoConnect(appSettings.mcpTunnel?.autoConnect === true)
     } catch (error) {
       console.error('[MCP 设置] 加载失败:', error)
+    }
+    // Tunnel 状态单独加载：失败只降级 Tunnel 区域，不影响项目 / Local MCP 显示（TC-BLANK-07）
+    try {
+      setTunnel(normalizeTunnelState(await window.electronAPI.getMcpTunnelState()))
+    } catch (error) {
+      console.warn('[MCP 设置] Tunnel 状态加载失败，已回退安全状态:', error)
+      setTunnel({ ...FALLBACK_TUNNEL_STATE })
     }
   }, [])
 
@@ -105,12 +101,33 @@ export function McpServerSettings(): React.ReactElement {
     void refresh()
     window.electronAPI.listAgentWorkspaces().then((items) => {
       setWorkspaces(items as unknown as AgentWorkspace[])
-    }).catch(() => {})
+    }).catch((error) => {
+      // TC-BLANK-08：项目列表加载失败 → 空列表 + 提示，页面继续显示
+      console.warn('[MCP 设置] 工作区列表加载失败:', error)
+      setWorkspaces([])
+    })
   }, [refresh])
 
-  // Tunnel 生命周期状态实时推送（规范 §22）：不再依赖手动刷新
+  // 页面挂载可观测性（修复文档 §23）：只记录能力存在性，不记录敏感配置
   React.useEffect(() => {
-    return window.electronAPI.onMcpTunnelStateChanged((state) => setTunnel(state))
+    const capabilities = getMcpApiCapabilities()
+    console.info('[MCP 设置] mounted', capabilities)
+    if (isBridgeOutdated(capabilities)) {
+      console.warn('[MCP 设置] preload bridge 版本过旧:', capabilities.bridgeVersion, '<', 3)
+    }
+  }, [])
+
+  // Tunnel 生命周期状态实时推送（§22）；preload 缺失该 API 时降级为手动刷新（TC-BLANK-03）
+  React.useEffect(() => {
+    const subscribe = window.electronAPI?.onMcpTunnelStateChanged
+    if (typeof subscribe !== 'function') {
+      console.warn('[MCP 设置] 当前 preload 不支持 Tunnel 状态订阅，实时状态已降级')
+      return
+    }
+    return subscribe((raw) => {
+      // 事件负载同样过防御 normalize（TC-BLANK-09），坏 State 不会打崩渲染树
+      setTunnel(normalizeTunnelState(raw))
+    })
   }, [])
 
   const applyConfig = React.useCallback(async (next: PromaMcpServerConfig): Promise<void> => {
@@ -230,6 +247,24 @@ export function McpServerSettings(): React.ReactElement {
   const phase = tunnelPhaseLabel(tunnel)
   const clientInfo = tunnel?.client
   const lastTool = status?.lastToolCall
+
+  // Preload bridge 版本过旧 → 明确提示重启，绝不白屏（修复文档 §25/§26）
+  if (isBridgeOutdated(getMcpApiCapabilities())) {
+    return (
+      <SettingsSection title="连接 ChatGPT Web" description="PROMA 后台组件版本与界面版本不一致。">
+        <SettingsCard divided={false}>
+          <div className="px-4 py-5 space-y-3">
+            <div className="text-sm font-medium">PROMA 后台组件需要重新加载</div>
+            <div className="text-xs leading-relaxed text-muted-foreground">
+              当前界面已经升级，但后台 Preload 仍是旧版本（界面要求 bridge ≥ {REQUIRED_MCP_BRIDGE_VERSION}，当前为 {getMcpApiCapabilities().bridgeVersion}）。请：
+              1. 完全退出 PROMA；2. 确认托盘也已退出；3. 重新启动应用。
+            </div>
+            <Button size="sm" variant="outline" type="button" onClick={() => { window.location.reload() }}>重新检查</Button>
+          </div>
+        </SettingsCard>
+      </SettingsSection>
+    )
+  }
 
   return (
     <SettingsSection
@@ -440,7 +475,7 @@ export function McpServerSettings(): React.ReactElement {
         <SettingsCard divided={false}>
           <div className="px-4 py-4 space-y-3">
             <div className="flex items-center gap-2 text-sm font-medium"><Globe size={14} /> 步骤 3 · 这台电脑：准备 OpenAI Tunnel Client</div>
-            <div className="text-xs leading-relaxed text-muted-foreground">OpenAI Tunnel Client 是 OpenAI 官方提供的本地安全连接组件，运行在这台电脑上（程序名称 <span className="font-mono">tunnel-client{process.platform === 'win32' ? '.exe' : ''}</span>）。PROMA 会负责启动它：它建立从这台电脑主动连接到 OpenAI 的安全 HTTPS 连接，把 ChatGPT 发来的 MCP 请求转交给 PROMA 的本地 MCP。它不是 AI 模型，也不是 MCP Server，不需要你访问任何网络地址，也不需要打开终端。</div>
+            <div className="text-xs leading-relaxed text-muted-foreground">OpenAI Tunnel Client 是 OpenAI 官方提供的本地安全连接组件，运行在这台电脑上（程序名称 <span className="font-mono">tunnel-client</span>，Windows 下通常为 <span className="font-mono">tunnel-client.exe</span>）。PROMA 会负责启动它：它建立从这台电脑主动连接到 OpenAI 的安全 HTTPS 连接，把 ChatGPT 发来的 MCP 请求转交给 PROMA 的本地 MCP。它不是 AI 模型，也不是 MCP Server，不需要你访问任何网络地址，也不需要打开终端。</div>
             <div className="space-y-2">
               {MODE_OPTIONS.map((option) => (
                 <label key={option.mode} className="flex items-start gap-2 rounded-lg border border-border/60 px-3 py-2 cursor-pointer hover:bg-muted/40">

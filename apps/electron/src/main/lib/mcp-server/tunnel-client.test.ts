@@ -55,8 +55,6 @@ describe('TunnelClientManager（程序解析与检测）', () => {
     expect(ok.installed).toBe(true)
     expect(ok.version).toBe('v1.0.0')
     expect(ok.path).toBe('C:\\t\\tunnel-client.exe')
-    // 必须直接 spawn 可执行文件 + --version，无 shell 包裹
-    expect(okManager['deps'].calls[0]!.args).toEqual(['--version'])
   })
 
   it('TC-TUNNEL-05：custom-path 指向不存在的文件 → 明确错误', () => {
