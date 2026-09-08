@@ -18,6 +18,8 @@ import { normalizePromaMcpServerConfig } from './config'
 import { buildMcpToolViews } from './tool-adapter'
 import { SessionManager } from './session-manager'
 import { isRequestAuthorized } from './auth'
+import { captureJsonRpcError, captureStatusCode, extractSafeRequestMetadata, getCapturedStatusCode, type CapturedRpcError } from './protocol/request-trace'
+import { isModernDiscoveryMethod, respondServerDiscover } from './protocol/modern-handler'
 import {
   resolveTargetWorkspace,
   assertToolPermission,
@@ -184,20 +186,17 @@ export class PromaMcpServer {
       return
     }
 
-    // V6 §18/§21：trace 覆盖 /mcp 全路径（含 auth 401/403 拒绝），finally 统一记录。
-    // 顺序：Trace Begin → Scope → Local Auth → Body → Protocol Dispatch → Response → Trace Finish。
-    let statusCode = 200
-    const originalWriteHead = res.writeHead.bind(res)
-    res.writeHead = ((...args: Parameters<typeof originalWriteHead>) => {
-      const status = args[0]
-      if (typeof status === 'number') statusCode = status
-      return originalWriteHead(...args)
-    }) as typeof res.writeHead
+    // V6 §18/§21 + V7 §5-§7/§19：trace 覆盖 /mcp 全路径（含 auth 401/403 拒绝与
+    // JSON-RPC error），finally 统一记录。顺序：Trace Begin → Scope → Local Auth →
+    // Body → Protocol Dispatch → Response → Trace Finish。
+    captureStatusCode(res)
+    let rpcError: CapturedRpcError | undefined
     let authResult: 'not-required' | 'accepted' | 'rejected' = 'not-required'
     let jsonRpcMethod: string | undefined
     let protocolVersion: string | undefined
     const sessionHeader = req.headers['mcp-session-id']
     const sessionId = typeof sessionHeader === 'string' ? sessionHeader : undefined
+    const requestMetadata = extractSafeRequestMetadata(req.headers)
     try {
       if (config.auth.type !== 'none') {
         const expectedToken = this.resolveAuthToken?.()
@@ -243,9 +242,14 @@ export class PromaMcpServer {
         ? rpcBody.params.protocolVersion
         : typeof headerVersion === 'string' ? headerVersion : undefined
         if (!sessionId) {
-          // V5 §11：无 Session ID 不再默认当作 initialize——按 JSON-RPC method 分流。
-          // initialize 走会话模型（legacy 兼容）；tools/list / tools/call 等现代无状态请求
-          // 直接处理（TC-V5-MCP-01/02）。
+          // V5 §11 + V7 §3：无 Session ID 按 JSON-RPC method 分流。
+          // server/discover → 现代 Discovery 兼容 shim（V7）；initialize → 会话模型
+          // （legacy 兼容）；其余（tools/list / tools/call / ping 等）→ stateless。
+          if (isModernDiscoveryMethod(jsonRpcMethod)) {
+            const requestId = (rpcBody as { id?: unknown }).id
+            respondServerDiscover(req, res, requestId)
+            return
+          }
           if (jsonRpcMethod === 'initialize' || jsonRpcMethod === undefined) {
             await this.handleInitialize(req, res, body, scope.profileId)
           } else {
@@ -264,14 +268,19 @@ export class PromaMcpServer {
       return
     }
 
-    // GET（SSE 流）保持会话模型
-    const entry = sessionId ? this.sessions.get(sessionId) : undefined
+    // GET：V7 §16——legacy 会话 → SSE；现代无会话 → 405 Method Not Allowed（不再 404）
+    if (!sessionId) {
+      res.writeHead(405, { allow: 'POST' })
+      res.end()
+      return
+    }
+    const entry = this.sessions.get(sessionId)
     if (!entry) {
       res.writeHead(404, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null }))
       return
     }
-    this.sessions.touch(sessionId!)
+    this.sessions.touch(sessionId)
     await entry.transport.handleRequest(req, res, undefined)
     } finally {
       this.recordRequest({
@@ -281,8 +290,10 @@ export class PromaMcpServer {
         hasSessionId: Boolean(sessionId),
         ...(jsonRpcMethod ? { jsonRpcMethod } : {}),
         ...(protocolVersion ? { protocolVersion } : {}),
-        statusCode,
+        statusCode: getCapturedStatusCode(res),
         authResult,
+        ...(requestMetadata ? { requestMetadata } : {}),
+        ...(rpcError ? { rpcErrorCode: rpcError.code } : {}),
       })
     }
   }

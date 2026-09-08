@@ -7,6 +7,7 @@ import { TunnelClientManager, executableName } from './tunnel-client-manager.ts'
 import { OpenAiTunnelClientAdapter, parseVersionOutput, classifyClientFailure } from './tunnel-client-adapter.ts'
 import { classifyConnectorConclusion, parseDoctorChecks } from './tunnel-doctor-parser.ts'
 import { TunnelProcessRunner } from './tunnel-process-runner.ts'
+import { computeMethodStats } from './protocol/request-trace.ts'
 import type { TunnelManagerDeps } from './tunnel-client-types.ts'
 
 function makeDeps(overrides?: Partial<TunnelManagerDeps>): TunnelManagerDeps & { calls: Array<{ executable: string; args: string[] }> } {
@@ -185,12 +186,12 @@ describe('OpenAiTunnelClientAdapter（CLI 契约）', () => {
     expect(result.ok).toBe(false)
   })
 
-  it('TC-V6-DIAG：Connector 结论归类 A / B-AUTH / B-PROTOCOL / C / OK', () => {
-    expect(classifyConnectorConclusion({ recentCount: 0, allRejected: false, toolsListCount: 0, toolsListOk: false, doctorOk: true })!.id).toBe('A')
-    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: true, toolsListCount: 0, toolsListOk: false, doctorOk: true })!.id).toBe('B-AUTH')
-    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: false, toolsListCount: 2, toolsListOk: false, doctorOk: true })!.id).toBe('B-PROTOCOL')
-    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: false, toolsListCount: 2, toolsListOk: true, doctorOk: false })!.id).toBe('C')
-    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: false, toolsListCount: 2, toolsListOk: true, doctorOk: true })!.id).toBe('OK')
+  it('TC-V6/V7-DIAG：Connector 结论归类 A / B-AUTH / B-DISCOVER / B-HANDSHAKE / B-PROTOCOL / C / OK', () => {
+    expect(classifyConnectorConclusion({ recentCount: 0, allRejected: false, discoverCount: 0, discoverOk: false, toolsListCount: 0, toolsListOk: false, doctorOk: true })!.id).toBe('A')
+    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: true, discoverCount: 3, discoverOk: false, toolsListCount: 0, toolsListOk: false, doctorOk: true })!.id).toBe('B-AUTH')
+    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: false, discoverCount: 0, discoverOk: false, toolsListCount: 2, toolsListOk: false, doctorOk: true })!.id).toBe('B-PROTOCOL')
+    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: false, discoverCount: 0, discoverOk: false, toolsListCount: 2, toolsListOk: true, doctorOk: false })!.id).toBe('C')
+    expect(classifyConnectorConclusion({ recentCount: 3, allRejected: false, discoverCount: 0, discoverOk: false, toolsListCount: 2, toolsListOk: true, doctorOk: true })!.id).toBe('OK')
   })
 
   it('TC-V6-KEY：runner env 注入 CONTROL_PLANE_API_KEY 与 PROMA_MCP_AUTH_HEADER（不进 argv）', () => {
@@ -198,6 +199,24 @@ describe('OpenAiTunnelClientAdapter（CLI 契约）', () => {
     const env = runner.buildTunnelClientEnv({ runtimeKey: 'rk-1234567890', localMcpBearerToken: 'local-abcdef' })
     expect(env.CONTROL_PLANE_API_KEY).toBe('rk-1234567890')
     expect(env.PROMA_MCP_AUTH_HEADER).toBe('Bearer local-abcdef')
+  })
+
+  it('computeMethodStats：方法直方图与分类计数（V7 §6）', () => {
+    const stats = computeMethodStats([
+      { at: 1, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'server/discover', statusCode: 404 },
+      { at: 2, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'server/discover', statusCode: 200 },
+      { at: 3, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'tools/list', statusCode: 200 },
+      { at: 4, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'tools/call', statusCode: 200 },
+      { at: 5, method: 'GET', path: '/mcp', hasSessionId: false, statusCode: 405 },
+    ])
+    expect(stats.total).toBe(5)
+    expect(stats.discoverCount).toBe(2)
+    expect(stats.toolsListCount).toBe(1)
+    expect(stats.toolsCallCount).toBe(1)
+    expect(stats.methods['server/discover']).toBe(2)
+    expect(stats.statuses['200']).toBe(3)
+    expect(stats.statuses['405']).toBe(1)
+    expect(stats.unknownCount).toBe(0)
   })
 
   it('parseDoctor：退出码 0 → ok；关键词归因到稳定错误码', () => {

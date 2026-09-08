@@ -135,6 +135,10 @@ export function computeBlockingFailures(parsed: ParsedDoctorCheck[], knownFailur
 export interface ConnectorConclusionInput {
   recentCount: number
   allRejected: boolean
+  /** server/discover 请求条数（V7 §8） */
+  discoverCount: number
+  /** server/discover 是否有成功响应（HTTP 2xx 且无 RPC error） */
+  discoverOk: boolean
   toolsListCount: number
   toolsListOk: boolean
   doctorOk: boolean
@@ -157,6 +161,24 @@ export function classifyConnectorConclusion(
       title: 'CASE B-AUTH：ChatGPT 请求已到达 PROMA，但被本地 MCP 认证拒绝',
       detail: 'Tunnel 链路是通的。可能原因：① PROMA MCP 开启了 Bearer Authentication；② Tunnel Client 没有注入 Authorization Header；③ Local MCP 认证配置修改后未重启。',
       action: '点击「检查配置并连接」让 PROMA 重新以正确凭据启动 Tunnel Client',
+    }
+  }
+  // V7 §8：CASE B-DISCOVER —— Discovery 已开始但 server/discover 响应失败
+  if (input.discoverCount > 0 && !input.discoverOk) {
+    return {
+      id: 'B-DISCOVER',
+      title: 'CASE B-DISCOVER：ChatGPT 已开始 MCP Discovery，但 server/discover 响应失败',
+      detail: 'Tunnel 链路正常，问题位于 PROMA MCP Discovery 协议层（详见请求时间线中的 RPC 错误码）。',
+      action: '更新 PROMA MCP Discovery compatibility 后重试',
+    }
+  }
+  // V7 §8：CASE B-HANDSHAKE —— discovery 前置完成但未进入 Tool Discovery
+  if (input.discoverOk && input.toolsListCount === 0) {
+    return {
+      id: 'B-HANDSHAKE',
+      title: 'CASE B-HANDSHAKE：Discovery 前置阶段完成，但未进入 Tool Discovery',
+      detail: 'server/discover 已成功，但 ChatGPT 未发送 tools/list。请检查 protocol negotiation / capabilities / response metadata。',
+      action: '重试创建 Connector；若持续失败请导出诊断信息',
     }
   }
   if (input.toolsListCount === 0) {

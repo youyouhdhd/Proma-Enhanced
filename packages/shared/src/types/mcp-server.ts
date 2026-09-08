@@ -241,6 +241,29 @@ export interface PromaMcpRequestTrace {
   statusCode: number
   /** 本机认证结果（V6 §19）：请求即使被 401/403 拒绝也必须留下观测 */
   authResult?: 'not-required' | 'accepted' | 'rejected'
+  /** 非敏感请求头（V7 §19：content-type / accept / mcp-protocol-version / mcp-method / mcp-name / user-agent） */
+  requestMetadata?: {
+    contentType?: string
+    accept?: string
+    protocolVersionHeader?: string
+    mcpMethod?: string
+    mcpName?: string
+    userAgent?: string
+  }
+  /** JSON-RPC 错误码（V7 §20：-32601 Method not found 等；HTTP 200 也可能携带 RPC error） */
+  rpcErrorCode?: number
+}
+
+/** MCP 请求方法直方图（V7 §5/§6：确认 ChatGPT 实际发了什么） */
+export interface PromaMcpMethodStats {
+  total: number
+  methods: Record<string, number>
+  statuses: Record<string, number>
+  discoverCount: number
+  initializeCount: number
+  toolsListCount: number
+  toolsCallCount: number
+  unknownCount: number
 }
 
 /** ChatGPT Connector 创建失败时的端到端诊断（V5 §13） */
@@ -249,8 +272,10 @@ export interface PromaMcpConnectorDiagnosis {
   /** 诊断窗口起点（V6 §28）：只统计该时间之后的请求，避免历史干扰 */
   windowStartedAt: number
   checks: Array<{ name: string; state: PromaMcpDiagnosticState; message?: string }>
-  /** CASE A：请求未到达；CASE B-AUTH：到达但被本机认证拒绝；CASE B-PROTOCOL：tools/list 失败；CASE C：tools/list 200 */
-  conclusion?: { id: 'A' | 'B-AUTH' | 'B-PROTOCOL' | 'C' | 'OK'; title: string; detail: string; action?: string }
+  /** CASE A：请求未到达；CASE B-AUTH：被本机认证拒绝；CASE B-DISCOVER：server/discover 失败；CASE B-HANDSHAKE：discovery 前置完成但未进 tools/list；CASE B-PROTOCOL：tools/list 失败；CASE C：tools/list 200 */
+  conclusion?: { id: 'A' | 'B-AUTH' | 'B-DISCOVER' | 'B-HANDSHAKE' | 'B-PROTOCOL' | 'C' | 'OK'; title: string; detail: string; action?: string }
+  /** 请求方法直方图（V7 §6） */
+  stats: PromaMcpMethodStats
 }
 
 /** Tunnel 专用 IPC 通道（第三轮起独立于 mcp-server:* 前缀） */

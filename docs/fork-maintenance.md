@@ -108,6 +108,14 @@ git fetch upstream --prune
 
 ## 本 Fork 的定制记录
 
+### 第七轮优化（v1.6.0）：现代 MCP Discovery 兼容（server/discover）
+
+- 请求观测升级：非敏感请求头（content-type/accept/mcp-protocol-version/mcp-method/mcp-name/user-agent）与 JSON-RPC error code 进入 trace；新增方法直方图 `PromaMcpMethodStats` 与诊断报告直方图/Discovery 管线四步 UI。
+- 实现 `server/discover` 兼容 shim（`protocol/modern-handler.ts`）：无会话 POST 在 SDK v1 之前拦截并响应 protocolVersions/capabilities/serverInfo；未知方法仍 -32601；带 TODO(SPIKE-MCP-SDK-MODERN) 的升级路径。
+- GET /mcp 无会话从 404 改为 405（Allow: POST）；带会话仍走 legacy SSE。
+- Connector 结论新增 CASE B-DISCOVER / B-HANDSHAKE；`classifyConnectorConclusion` 抽为纯函数；Doctor 降噪（官方入口折叠）与 codex_plugin 降级为可选。
+- 新增 `test:mcp-modern` 脚本（模拟 server/discover → tools/list → workspace_list）；集成测试 +5 项。
+
 ### 第六轮修复（v1.5.0）：凭据状态派生 + Doctor 对齐官方 Check + Local MCP Auth 转发
 
 - Runtime Key 状态改为派生快照（safeStorage 为事实来源），保存后回读验证并实时推送；新增凭据健康三态（unreadable 不显示绿色）与清除入口。

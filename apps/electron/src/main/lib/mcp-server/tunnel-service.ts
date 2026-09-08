@@ -23,6 +23,7 @@ import { TunnelClientInstaller } from './tunnel-client-installer'
 import { classifyClientFailure, openAiTunnelClientAdapter } from './tunnel-client-adapter'
 import { TunnelProcessRunner } from './tunnel-process-runner'
 import { classifyConnectorConclusion } from './tunnel-doctor-parser'
+import { computeMethodStats } from './protocol/request-trace'
 import type { TunnelRuntimeConfig } from './tunnel-client-types'
 
 const READY_POLL_INTERVAL_MS = 1_000
@@ -525,11 +526,13 @@ class McpTunnelService {
     const conclusion = classifyConnectorConclusion({
       recentCount: recent.length,
       allRejected: recent.every((r) => r.authResult === 'rejected' || r.statusCode === 401 || r.statusCode === 403),
+      discoverCount: recent.filter((r) => r.jsonRpcMethod === 'server/discover').length,
+      discoverOk: recent.some((r) => r.jsonRpcMethod === 'server/discover' && r.statusCode === 200 && !r.rpcErrorCode),
       toolsListCount: toolsList.length,
       toolsListOk: toolsList.some((r) => r.statusCode === 200),
       doctorOk,
     })
-    return { generatedAt: Date.now(), windowStartedAt: windowStart, checks, conclusion }
+    return { generatedAt: Date.now(), windowStartedAt: windowStart, checks, conclusion, stats: computeMethodStats(recent) }
   }
 
   // ===== 内部 =====

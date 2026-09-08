@@ -1,6 +1,6 @@
 {
   "name": "@proma/electron",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Proma，为专业用户设计的 Agent",
   "main": "dist/main.cjs",
   "author": {
@@ -41,6 +41,7 @@
     "typecheck": "tsc --noEmit",
     "check:renderer-boundaries": "bun run scripts/check-renderer-node-globals.ts",
     "smoke:renderer-dist": "bun run scripts/smoke-renderer-dist.ts",
+    "test:mcp-modern": "bun run scripts/test-modern-mcp-discovery.ts",
     "generate:icons": "cd resources && ./generate-icons.sh",
     "pack": "bun run build && bun run sync:runtime-deps && bun run prepare:node-pty && electron-builder --dir",
     "dist": "bun run build && bun run sync:runtime-deps && bun run prepare:node-pty && electron-builder",

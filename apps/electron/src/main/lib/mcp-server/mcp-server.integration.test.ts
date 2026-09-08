@@ -309,7 +309,7 @@ describe('PromaMcpServer 多工作区集成', () => {
     })
     expect(response.status).toBe(200)
     const payload = await parseRpcPayload(response) as { result?: { tools?: Array<{ name: string }> } }
-    const names = (payload.result?.tools ?? []).map((t) => t.name)
+    const names = (payload.result?.tools ?? []).map((t: { name: string }) => t.name)
     expect(names).toContain('workspace_list')
     expect(names).toContain('read_file')
   })
@@ -358,5 +358,60 @@ describe('PromaMcpServer 多工作区集成', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
     })
     expect(response.status).toBe(200)
+  })
+  it('TC-V7-DISCOVER-01：无 Session ID 的 server/discover 返回协议版本 / capabilities / serverInfo', async () => {
+    const root = makeRoot('o1')
+    writeFileSync(join(root, 'a.txt'), 'AAA')
+    const endpoint = await startServer([workspaceEntry('agent-a', 'ws_a', { read: true, write: false, shell: false })], new Map([['ws_a', root]]))
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover' }),
+    })
+    expect(response.status).toBe(200)
+    const text = await response.text()
+    const dataLine = text.split(/\r?\n/).reverse().find((line) => line.startsWith('data:'))
+    const payload = dataLine ? JSON.parse(dataLine.slice(5).trim()) : (JSON.parse(text) as Record<string, unknown>)
+    const result = (payload as { result?: { protocolVersions?: string[]; capabilities?: { tools?: unknown }; serverInfo?: { name?: string; version?: string } } }).result
+    expect(Array.isArray(result?.protocolVersions)).toBe(true)
+    expect(result?.capabilities?.tools).toBeDefined()
+    expect(result?.serverInfo?.name).toBe('Proma MCP')
+  })
+
+  it('TC-V7-DISCOVER-02：server/discover 成功后 stateless tools/list 仍可用', async () => {
+    const root = makeRoot('o2')
+    writeFileSync(join(root, 'a.txt'), 'AAA')
+    const endpoint = await startServer([workspaceEntry('agent-a', 'ws_a', { read: true, write: false, shell: false })], new Map([['ws_a', root]]))
+    const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }
+    await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover' }) })
+    const response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) })
+    expect(response.status).toBe(200)
+    const text = await response.text()
+    const dataLine = text.split(/\r?\n/).reverse().find((line) => line.startsWith('data:'))
+    const payload = dataLine ? JSON.parse(dataLine.slice(5).trim()) : (JSON.parse(text) as { result?: { tools?: Array<{ name: string }> } })
+    const names = (payload.result?.tools ?? []).map((t: { name: string }) => t.name)
+    expect(names).toContain('workspace_list')
+  })
+
+  it('TC-V7-GET-01：现代 GET /mcp（无会话）返回 405 Method Not Allowed', async () => {
+    const root = makeRoot('o3')
+    const endpoint = await startServer([workspaceEntry('agent-a', 'ws_a', { read: true, write: false, shell: false })], new Map([['ws_a', root]]))
+    const response = await fetch(endpoint, { method: 'GET' })
+    expect(response.status).toBe(405)
+    expect(response.headers.get('allow')).toBe('POST')
+  })
+
+  it('TC-V7-RPC-TRACE-01：未知方法 foo/bar 返回 JSON-RPC -32601（HTTP 200）', async () => {
+    const root = makeRoot('o4')
+    const endpoint = await startServer([workspaceEntry('agent-a', 'ws_a', { read: true, write: false, shell: false })], new Map([['ws_a', root]]))
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'foo/bar' }),
+    })
+    const text = await response.text()
+    const dataLine = text.split(/\r?\n/).reverse().find((line) => line.startsWith('data:'))
+    const payload = dataLine ? JSON.parse(dataLine.slice(5).trim()) : (JSON.parse(text) as { error?: { code: number } })
+    expect(payload.error?.code).toBe(-32601)
   })
 })

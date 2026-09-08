@@ -54,6 +54,9 @@ const MODE_OPTIONS: Array<{ mode: PromaMcpTunnelClientMode; label: string; hint:
   { mode: 'system-path', label: '从系统 PATH 查找（高级）', hint: '使用已加入系统 PATH 的 tunnel-client 命令。' },
 ]
 
+/** Doctor 降噪：扩展检查默认折叠（V7 §28），只有关键项直接可见 */
+const DOCTOR_EXTENDED_CHECKS = new Set(['配置来源', '配置加载', 'Tunnels 管理地址', 'Runtime API Keys 地址', '管理密钥地址', 'ChatGPT Connector 设置地址', 'Tunnel 本地管理界面'])
+
 export function McpServerSettings(): React.ReactElement {
   const [config, setConfig] = React.useState<PromaMcpServerConfig>(DEFAULT_MCP_CONFIG)
   const [status, setStatus] = React.useState<PromaMcpServerStatus | null>(null)
@@ -261,6 +264,14 @@ export function McpServerSettings(): React.ReactElement {
   const clientInfo = tunnel?.client
   const lastTool = status?.lastToolCall
 
+  /** Discovery 管线四步（V7 §26）：从 stats 与结论推导 */
+  const discoveryPipeline = diagnosis ? [
+    { label: '① Tunnel Request', ok: diagnosis.stats.total > 0, detail: diagnosis.stats.total + ' 条请求' },
+    { label: '② Server Discovery', ok: diagnosis.stats.discoverCount > 0 && diagnosis.conclusion?.id !== 'B-DISCOVER', detail: diagnosis.stats.discoverCount > 0 ? diagnosis.stats.discoverCount + ' 次' + (diagnosis.conclusion?.id === 'B-DISCOVER' ? ' · 响应失败' : ' · 成功') : '未执行' },
+    { label: '③ Tool Discovery', ok: diagnosis.stats.toolsListCount > 0 && diagnosis.conclusion?.id !== 'B-PROTOCOL', detail: diagnosis.stats.toolsListCount > 0 ? diagnosis.stats.toolsListCount + ' 次' + (diagnosis.conclusion?.id === 'B-PROTOCOL' ? ' · 失败' : ' · 成功') : '未执行' },
+    { label: '④ Tool Call', ok: diagnosis.stats.toolsCallCount > 0, detail: diagnosis.stats.toolsCallCount > 0 ? diagnosis.stats.toolsCallCount + ' 次' : '未执行' },
+  ] : []
+
   // Preload bridge 版本过旧 → 明确提示重启，绝不白屏（修复文档 §25/§26）
   if (isBridgeOutdated(getMcpApiCapabilities())) {
     return (
@@ -410,7 +421,7 @@ export function McpServerSettings(): React.ReactElement {
                               ? 'text-amber-600 dark:text-amber-400'
                               : 'text-emerald-600 dark:text-emerald-400'
                         }>
-                          {new Date(trace.at).toLocaleTimeString()} {trace.jsonRpcMethod ?? trace.method} {trace.statusCode}{trace.authResult === 'rejected' ? ' 认证拒绝' : ''}{trace.hasSessionId ? '' : ' (无会话)'}
+                          {new Date(trace.at).toLocaleTimeString()} {trace.jsonRpcMethod ?? trace.method} {trace.statusCode}{trace.authResult === 'rejected' ? ' 认证拒绝' : ''}{trace.rpcErrorCode ? ' RPC ' + trace.rpcErrorCode : ''}{trace.hasSessionId ? '' : ' (无会话)'}
                         </div>
                       ))}
                     </div>
@@ -694,13 +705,25 @@ export function McpServerSettings(): React.ReactElement {
             {doctor && (
               <div className="rounded-md bg-muted/50 px-3 py-2 text-xs space-y-1.5">
                 <div className="font-medium">连接诊断{doctor.ok ? '' : '（存在失败项）'}</div>
-                {doctor.checks.map((check) => (
+                {doctor.checks.filter((check) => !DOCTOR_EXTENDED_CHECKS.has(check.name)).map((check) => (
                   <div key={check.name} className="flex items-center gap-2">
                     {check.state === 'pass' ? <StatusDot on /> : check.state === 'fail' ? <span className="font-bold text-destructive">✕</span> : <span className="font-bold text-muted-foreground">?</span>}
-                    <span className={check.state === 'fail' ? 'text-destructive' : check.state === 'pass' ? 'text-foreground' : 'text-muted-foreground'}>{check.name}</span>
+                    <span className={check.state === 'fail' ? 'text-destructive' : check.state === 'pass' ? 'text-foreground' : 'text-muted-foreground'}>{check.name}{check.name === 'Codex Tunnel 插件' ? '（可选，仅 Codex CLI 需要）' : ''}</span>
                     {check.message && <span className="text-muted-foreground/80">{check.message}</span>}
                   </div>
                 ))}
+                {doctor.checks.some((check) => DOCTOR_EXTENDED_CHECKS.has(check.name)) && (
+                  <details className="rounded bg-muted/60 px-2 py-1">
+                    <summary className="cursor-pointer select-none text-muted-foreground">OpenAI 官方入口与扩展检查</summary>
+                    {doctor.checks.filter((check) => DOCTOR_EXTENDED_CHECKS.has(check.name)).map((check) => (
+                      <div key={check.name} className="flex items-center gap-2 pt-0.5">
+                        {check.state === 'pass' ? <StatusDot on /> : check.state === 'fail' ? <span className="font-bold text-destructive">✕</span> : <span className="font-bold text-muted-foreground">?</span>}
+                        <span className="text-muted-foreground">{check.name}</span>
+                        {check.message && <span className="text-muted-foreground/70">{check.message}</span>}
+                      </div>
+                    ))}
+                  </details>
+                )}
                 <details>
                   <summary className="cursor-pointer select-none text-muted-foreground">查看技术详情</summary>
                   <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/60 px-2 py-1 font-mono text-[10px]">{doctor.technical ? ('exit: ' + (doctor.technical.exitCode ?? '-') + '\n' + (doctor.technical.stdout || '') + '\n' + (doctor.technical.stderr || '')) : '（无）'}</pre>
@@ -710,6 +733,15 @@ export function McpServerSettings(): React.ReactElement {
             {diagnosis && (
               <div className="rounded-md bg-muted/50 px-3 py-2 text-xs space-y-1.5">
                 <div className="font-medium">ChatGPT Connector 端到端诊断</div>
+                <div className="space-y-0.5">
+                  {discoveryPipeline.map((step) => (
+                    <div key={step.label} className="flex items-center gap-2">
+                      {step.ok ? <StatusDot on /> : <span className="font-bold text-muted-foreground">○</span>}
+                      <span className={step.ok ? 'text-foreground' : 'text-muted-foreground'}>{step.label}</span>
+                      <span className="text-muted-foreground/80">{step.detail}</span>
+                    </div>
+                  ))}
+                </div>
                 {diagnosis.checks.map((check, index) => (
                   <div key={check.name + '-' + index} className="flex items-center gap-2">
                     {check.state === 'pass' ? <StatusDot on /> : check.state === 'fail' ? <span className="font-bold text-destructive">✕</span> : <span className="font-bold text-muted-foreground">?</span>}
@@ -717,7 +749,21 @@ export function McpServerSettings(): React.ReactElement {
                     {check.message && <span className="text-muted-foreground/80">{check.message}</span>}
                   </div>
                 ))}
-            {diagnosis.conclusion && (
+                <div className="grid grid-cols-2 gap-2 border-t border-border/60 pt-1.5">
+                  <div>
+                    <div className="text-muted-foreground">RPC Method</div>
+                    {Object.entries(diagnosis.stats.methods).map(([m, n]) => (
+                      <div key={m} className="font-mono">{m} {n}</div>
+                    ))}
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground">HTTP</div>
+                    {Object.entries(diagnosis.stats.statuses).map(([s, n]) => (
+                      <div key={s} className="font-mono">{s} {n}</div>
+                    ))}
+                  </div>
+                </div>
+                {diagnosis.conclusion && (
                   <div className={cn('rounded-md px-2 py-1.5', diagnosis.conclusion.id === 'OK' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-amber-500/10 text-amber-700 dark:text-amber-300')}>
                     <div className="font-medium">{diagnosis.conclusion.title}</div>
                     <div className="mt-0.5 leading-relaxed">{diagnosis.conclusion.detail}</div>
