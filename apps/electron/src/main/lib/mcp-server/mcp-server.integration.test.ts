@@ -10,6 +10,9 @@ import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { PromaMcpServer } from './server.ts'
+import { isSpecType } from '@modelcontextprotocol/server'
+import { modernMeta } from './protocol/test-fixture'
+import { MODERN_PROTOCOL_VERSION } from './protocol/modern-server'
 import { createDefaultLocalToolRegistry } from '../local-tools/registry.ts'
 import type { PromaMcpServerConfig, PromaMcpWorkspaceEntry } from '@proma/shared'
 
@@ -365,26 +368,30 @@ describe('PromaMcpServer 多工作区集成', () => {
     const endpoint = await startServer([workspaceEntry('agent-a', 'ws_a', { read: true, write: false, shell: false })], new Map([['ws_a', root]]))
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover' }),
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': MODERN_PROTOCOL_VERSION, 'mcp-method': 'server/discover' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover', params: { _meta: modernMeta } }),
     })
     expect(response.status).toBe(200)
     const text = await response.text()
     const dataLine = text.split(/\r?\n/).reverse().find((line) => line.startsWith('data:'))
     const payload = dataLine ? JSON.parse(dataLine.slice(5).trim()) : (JSON.parse(text) as Record<string, unknown>)
-    const result = (payload as { result?: { protocolVersions?: string[]; capabilities?: { tools?: unknown }; serverInfo?: { name?: string; version?: string } } }).result
-    expect(Array.isArray(result?.protocolVersions)).toBe(true)
-    expect(result?.capabilities?.tools).toBeDefined()
-    expect(result?.serverInfo?.name).toBe('Proma MCP')
+    const result: unknown = payload.result
+    expect(isSpecType.DiscoverResult(result)).toBe(true)
+    if (!isSpecType.DiscoverResult(result)) throw new Error('官方 Discovery schema 不匹配')
+    expect(result.supportedVersions).toContain(MODERN_PROTOCOL_VERSION)
+    expect(result.capabilities.tools).toBeDefined()
   })
 
   it('TC-V7-DISCOVER-02：server/discover 成功后 stateless tools/list 仍可用', async () => {
     const root = makeRoot('o2')
     writeFileSync(join(root, 'a.txt'), 'AAA')
     const endpoint = await startServer([workspaceEntry('agent-a', 'ws_a', { read: true, write: false, shell: false })], new Map([['ws_a', root]]))
-    const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }
-    await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover' }) })
-    const response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) })
+    const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': MODERN_PROTOCOL_VERSION }
+    const discovery = await fetch(endpoint, { method: 'POST', headers: { ...headers, 'mcp-method': 'server/discover' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover', params: { _meta: modernMeta } }) })
+    expect(discovery.status).toBe(200)
+    const discoveryPayload = await discovery.json() as { result?: unknown }
+    expect(isSpecType.DiscoverResult(discoveryPayload.result)).toBe(true)
+    const response = await fetch(endpoint, { method: 'POST', headers: { ...headers, 'mcp-method': 'tools/list' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: { _meta: modernMeta } }) })
     expect(response.status).toBe(200)
     const text = await response.text()
     const dataLine = text.split(/\r?\n/).reverse().find((line) => line.startsWith('data:'))

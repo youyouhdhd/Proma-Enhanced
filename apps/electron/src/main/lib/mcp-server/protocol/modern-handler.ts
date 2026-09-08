@@ -1,4 +1,5 @@
 /**
+ * @deprecated V7 历史 shim：V8 已从生产路由移除，仅待真实 ChatGPT 验收后删除。
  * protocol/modern-handler — 现代 MCP Discovery 兼容（V7）
  *
  * ChatGPT Connector 在 tools/list 之前可能发送 `server/discover`。
@@ -13,9 +14,10 @@
 import type { IncomingHttpHeaders, ServerResponse } from 'node:http'
 
 /** PROMA MCP 对外声明的协议版本与身份 */
-export const MODERN_PROTOCOL_VERSION = '2026-07-28'
-export const PROMA_MCP_SERVER_NAME = 'Proma MCP'
-export const PROMA_MCP_SERVER_VERSION = '1.6.0'
+import { MCP_SERVER_INFO, MODERN_PROTOCOL_VERSION } from './modern-server'
+export { MODERN_PROTOCOL_VERSION }
+export const PROMA_MCP_SERVER_NAME = MCP_SERVER_INFO.name
+export const PROMA_MCP_SERVER_VERSION = MCP_SERVER_INFO.version
 
 /** server/discover 的兼容响应（概念结构以 V7 §12 为准；升级 SDK 后走官方 schema） */
 export interface ServerDiscoverResult {

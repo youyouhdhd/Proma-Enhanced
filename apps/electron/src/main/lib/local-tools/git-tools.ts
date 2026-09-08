@@ -28,7 +28,8 @@ export const gitStatusTool: LocalToolDefinition = {
   },
   risk: 'read',
   async execute(_input, context) {
-    const branch = runGit(context.rootPath, ['rev-parse', '--abbrev-ref', 'HEAD'])
+    let branch = runGit(context.rootPath, ['symbolic-ref', '--short', 'HEAD'])
+    if (branch.status !== 0) branch = runGit(context.rootPath, ['rev-parse', '--short', 'HEAD'])
     if (branch.status !== 0) return toolError('GIT_ERROR', '当前目录不是 Git 仓库')
     const status = runGit(context.rootPath, ['status', '--porcelain=v1', '-b'])
     if (status.status !== 0) return toolError('GIT_ERROR', status.stderr.trim() || 'git status 执行失败')

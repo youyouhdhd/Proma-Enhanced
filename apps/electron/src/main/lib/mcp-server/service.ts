@@ -161,6 +161,10 @@ class PromaMcpServerService {
     await this.server.stop()
   }
 
+  startProtocolDebug(): PromaMcpServerStatus {
+    return this.server.startProtocolDebug()
+  }
+
   getStatus(): PromaMcpServerStatus {
     return this.server.getStatus()
   }

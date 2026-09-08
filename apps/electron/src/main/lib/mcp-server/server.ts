@@ -10,16 +10,14 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { randomUUID } from 'node:crypto'
-import { Server } from '@modelcontextprotocol/sdk/server/index.js'
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { localhostHostValidation, localhostOriginValidation } from '@modelcontextprotocol/node'
 import { normalizePromaMcpServerConfig } from './config'
-import { buildMcpToolViews } from './tool-adapter'
-import { SessionManager } from './session-manager'
+import { buildMcpToolViews, visibleToolNames } from './tool-adapter'
 import { isRequestAuthorized } from './auth'
-import { captureJsonRpcError, captureStatusCode, extractSafeRequestMetadata, getCapturedStatusCode, type CapturedRpcError } from './protocol/request-trace'
-import { isModernDiscoveryMethod, respondServerDiscover } from './protocol/modern-handler'
+import { captureRpcResponse, extractSafeRequestMetadata } from './protocol/request-trace'
+import { createModernServer, MCP_SERVER_INFO, MODERN_PROTOCOL_VERSION, type McpToolHandlers } from './protocol/modern-server'
+import { LegacyMcpServer } from './protocol/legacy-server'
+import { usesLegacyProtocol } from './protocol/protocol-router'
 import {
   resolveTargetWorkspace,
   assertToolPermission,
@@ -33,7 +31,8 @@ import {
 import type { PromaMcpRequestTrace, PromaMcpServerConfig, PromaMcpServerStatus } from '@proma/shared'
 import type { LocalToolRegistry, LocalToolContext, LocalToolResult } from '../local-tools'
 
-const IDLE_TTL_MS = 30 * 60 * 1000
+const validateHost = localhostHostValidation()
+const validateOrigin = localhostOriginValidation()
 
 interface StartInput {
   config: PromaMcpServerConfig
@@ -48,7 +47,10 @@ interface StartInput {
 
 export class PromaMcpServer {
   private httpServer: ReturnType<typeof createServer> | null = null
-  private readonly sessions = new SessionManager()
+  private legacy = new LegacyMcpServer()
+  private readonly modern = new Map<string, ReturnType<typeof createModernServer>>()
+  private debugStartedAt = 0
+  private debugUntil = 0
   private config: PromaMcpServerConfig | null = null
   private listWorkspaces: (() => WorkspaceDirectoryEntry[]) | null = null
   private resolveWorkspaceContext: StartInput['resolveWorkspaceContext'] | null = null
@@ -65,6 +67,8 @@ export class PromaMcpServer {
 
   async start(input: StartInput): Promise<PromaMcpServerStatus> {
     await this.stop()
+    this.legacy = new LegacyMcpServer()
+    this.requestTraces.length = 0
     const config = normalizePromaMcpServerConfig(input.config)
     this.config = config
     this.listWorkspaces = input.listWorkspaces
@@ -89,15 +93,15 @@ export class PromaMcpServer {
 
     const address = httpServer.address()
     const port = typeof address === 'object' && address ? address.port : requestedPort
-    this.sessions.startIdleSweep((sessionId) => { void this.closeSession(sessionId) }, IDLE_TTL_MS)
     return this.getStatus(port)
   }
 
   async stop(): Promise<void> {
-    this.sessions.closeAll()
+    await this.legacy.close()
+    await Promise.all([...this.modern.values()].map((handler) => handler.close()))
+    this.modern.clear()
     const server = this.httpServer
     this.httpServer = null
-    this.sessions.stopIdleSweep()
     if (!server) return
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
@@ -123,7 +127,10 @@ export class PromaMcpServer {
       host,
       port,
       endpoint: server !== null ? 'http://' + host + ':' + port + '/mcp' : '',
-      activeSessions: this.sessions.size,
+      activeSessions: this.legacy.sessions.size,
+      appVersion: MCP_SERVER_INFO.version,
+      mcpProtocolVersion: MODERN_PROTOCOL_VERSION,
+      protocolDebug: { startedAt: this.debugStartedAt, expiresAt: this.debugUntil, active: Date.now() < this.debugUntil },
       workspaces: summaries,
       profileEndpoints,
       ...(this.lastToolCall ? { lastToolCall: this.lastToolCall } : {}),
@@ -135,14 +142,14 @@ export class PromaMcpServer {
   /** 记录一条请求观测（不含 Authorization / Runtime Key / 工具参数） */
   private recordRequest(trace: PromaMcpRequestTrace): void {
     this.requestTraces.push(trace)
-    if (this.requestTraces.length > 50) this.requestTraces.shift()
+    if (this.requestTraces.length > 500) this.requestTraces.shift()
   }
 
-  private async closeSession(sessionId: string): Promise<void> {
-    const entry = this.sessions.get(sessionId)
-    if (!entry) return
-    this.sessions.delete(sessionId)
-    try { await entry.transport.close() } catch { /* 已关闭 */ }
+  startProtocolDebug(): PromaMcpServerStatus {
+    this.debugStartedAt = Date.now()
+    this.debugUntil = this.debugStartedAt + 120_000
+    this.requestTraces.length = 0
+    return this.getStatus()
   }
 
   /** 解析 endpoint 作用域：/mcp = 全部；/mcp/<profileId> = Profile 子集。未知 Profile 返回 undefined。 */
@@ -166,217 +173,88 @@ export class PromaMcpServer {
     return all.filter((entry) => profile.workspaceIds.includes(entry.id))
   }
 
-  private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = req.url ?? ''
-    const config = this.config
-    if (!config || !this.httpServer) {
-      res.writeHead(503).end()
-      return
-    }
-
-    if (url === '/health' || url.startsWith('/health?')) {
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ name: 'Proma MCP', status: 'ok' }))
-      return
-    }
-
-    const scope = this.resolveEndpointScope(url)
-    if (!scope.ok) {
-      res.writeHead(404).end()
-      return
-    }
-
-    // V6 §18/§21 + V7 §5-§7/§19：trace 覆盖 /mcp 全路径（含 auth 401/403 拒绝与
-    // JSON-RPC error），finally 统一记录。顺序：Trace Begin → Scope → Local Auth →
-    // Body → Protocol Dispatch → Response → Trace Finish。
-    captureStatusCode(res)
-    let rpcError: CapturedRpcError | undefined
-    let authResult: 'not-required' | 'accepted' | 'rejected' = 'not-required'
-    let jsonRpcMethod: string | undefined
-    let protocolVersion: string | undefined
-    const sessionHeader = req.headers['mcp-session-id']
-    const sessionId = typeof sessionHeader === 'string' ? sessionHeader : undefined
-    const requestMetadata = extractSafeRequestMetadata(req.headers)
-    try {
-      if (config.auth.type !== 'none') {
-        const expectedToken = this.resolveAuthToken?.()
-        if (expectedToken && isRequestAuthorized(config.auth, expectedToken, req.headers.authorization)) {
-          authResult = 'accepted'
-        } else if (!expectedToken) {
-          authResult = 'not-required'
-        } else {
-          res.writeHead(401, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: 'unauthorized' }))
-          return
+  private toolHandlers(profileId?: string): McpToolHandlers {
+    return {
+      list: () => this.config && this.registry ? buildMcpToolViews(this.config, this.registry) : [],
+      call: async (name, args) => {
+        if (!this.registry || !this.config || !this.resolveWorkspaceContext) throw new Error('MCP 未运行')
+        const result: LocalToolResult = visibleToolNames(this.config, this.registry).has(name)
+          ? await this.dispatchToolCall(name, args, profileId, this.resolveWorkspaceContext, this.registry)
+          : { ok: false, error: { code: 'PERMISSION_DENIED', message: '工具未启用' } }
+        this.lastToolCall = { name, at: Date.now() }
+        return {
+          content: [{ type: 'text', text: result.text ?? JSON.stringify(result.ok ? result.data ?? {} : result.error) }],
+          ...(result.ok && result.data ? { structuredContent: result.data } : {}),
+          isError: !result.ok,
         }
-      }
-
-    if (req.method === 'DELETE') {
-      const sessionId = req.headers['mcp-session-id']
-      if (typeof sessionId === 'string') await this.closeSession(sessionId)
-      res.writeHead(200).end()
-      return
+      },
     }
+  }
 
-    if (req.method !== 'POST' && req.method !== 'GET') {
-      res.writeHead(405, { allow: 'POST, GET, DELETE' }).end()
-      return
+  private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const trace: PromaMcpRequestTrace = {
+      at: Date.now(), method: req.method ?? '', path: '/mcp/unknown',
+      hasSessionId: typeof req.headers['mcp-session-id'] === 'string', statusCode: 0,
+      authResult: 'not-required',
+      ...(Date.now() < this.debugUntil ? { requestMetadata: extractSafeRequestMetadata(req.headers) } : {}),
     }
-
-    if (req.method === 'POST') {
-      // V5 §10：在路由层读取并观测请求（只记录 method / path / session 有无 / JSON-RPC
-      // method / 协议版本 / 状态码；绝不记录 Authorization、Runtime Key、工具参数）。
-      let body: unknown
-      try {
-        body = await readJsonBody(req)
-      } catch {
-        this.recordRequest({ at: Date.now(), method: 'POST', path: url.split('?')[0] ?? '', hasSessionId: Boolean(sessionId), statusCode: 400 })
-        res.writeHead(400, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null }))
+    const response = captureRpcResponse(res)
+    let recorded = false
+    const finish = (): void => {
+      if (recorded) return
+      recorded = true
+      const sessionEvent = res.getHeader('mcp-session-id') ? 'created'
+        : trace.hasSessionId && res.statusCode < 400 ? (req.method === 'DELETE' ? 'closed' : 'used') : undefined
+      this.recordRequest({ ...trace, ...response(), statusCode: res.statusCode, completed: res.writableFinished, ...(sessionEvent ? { sessionEvent } : {}) })
+    }
+    res.once('finish', finish)
+    res.once('close', finish)
+    try {
+      const config = this.config
+      if (!config || !this.httpServer) { res.writeHead(503).end(); return }
+      if (!validateHost(req, res) || !validateOrigin(req, res)) { trace.authResult = 'rejected'; return }
+      const url = req.url ?? ''
+      if (url.split('?')[0] === '/health') {
+        trace.path = '/health'
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ...MCP_SERVER_INFO, status: 'ok' }))
         return
       }
-      const rpcBody = (body && typeof body === 'object' ? body : {}) as { method?: unknown; params?: { protocolVersion?: unknown } }
-      jsonRpcMethod = typeof rpcBody.method === 'string' ? rpcBody.method : undefined
-      const headerVersion = req.headers['mcp-protocol-version']
-      protocolVersion = typeof rpcBody.params?.protocolVersion === 'string'
-        ? rpcBody.params.protocolVersion
-        : typeof headerVersion === 'string' ? headerVersion : undefined
-        if (!sessionId) {
-          // V5 §11 + V7 §3：无 Session ID 按 JSON-RPC method 分流。
-          // server/discover → 现代 Discovery 兼容 shim（V7）；initialize → 会话模型
-          // （legacy 兼容）；其余（tools/list / tools/call / ping 等）→ stateless。
-          if (isModernDiscoveryMethod(jsonRpcMethod)) {
-            const requestId = (rpcBody as { id?: unknown }).id
-            respondServerDiscover(req, res, requestId)
-            return
-          }
-          if (jsonRpcMethod === 'initialize' || jsonRpcMethod === undefined) {
-            await this.handleInitialize(req, res, body, scope.profileId)
-          } else {
-            await this.handleStatelessRequest(req, res, body, scope.profileId)
-          }
-        } else {
-          const entry = this.sessions.get(sessionId)
-          if (!entry) {
-            res.writeHead(404, { 'content-type': 'application/json' })
-            res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null }))
-          } else {
-            this.sessions.touch(sessionId)
-            await entry.transport.handleRequest(req, res, body)
-          }
+      const scope = this.resolveEndpointScope(url)
+      if (!scope.ok) { res.writeHead(404).end(); return }
+      trace.path = scope.profileId ? '/mcp/' + scope.profileId : '/mcp'
+      if (config.auth.type !== 'none') {
+        trace.authResult = 'rejected'
+        if (!isRequestAuthorized(config.auth, this.resolveAuthToken?.(), req.headers.authorization)) {
+          res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' }))
+          return
         }
-      return
-    }
-
-    // GET：V7 §16——legacy 会话 → SSE；现代无会话 → 405 Method Not Allowed（不再 404）
-    if (!sessionId) {
-      res.writeHead(405, { allow: 'POST' })
-      res.end()
-      return
-    }
-    const entry = this.sessions.get(sessionId)
-    if (!entry) {
-      res.writeHead(404, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null }))
-      return
-    }
-    this.sessions.touch(sessionId)
-    await entry.transport.handleRequest(req, res, undefined)
-    } finally {
-      this.recordRequest({
-        at: Date.now(),
-        method: req.method ?? '',
-        path: url.split('?')[0] ?? '',
-        hasSessionId: Boolean(sessionId),
-        ...(jsonRpcMethod ? { jsonRpcMethod } : {}),
-        ...(protocolVersion ? { protocolVersion } : {}),
-        statusCode: getCapturedStatusCode(res),
-        authResult,
-        ...(requestMetadata ? { requestMetadata } : {}),
-        ...(rpcError ? { rpcErrorCode: rpcError.code } : {}),
-      })
-    }
-  }
-
-  /** 构造已接线的 MCP Server 实例（会话模式与无状态模式共用，工具逻辑只有一份） */
-  private createConfiguredServer(profileId: string | undefined): Server | undefined {
-    if (!this.registry || !this.config || !this.resolveWorkspaceContext) {
-      return undefined
-    }
-    const registry = this.registry
-    const resolveWorkspaceContext = this.resolveWorkspaceContext
-    const server = new Server(
-      { name: 'Proma MCP', version: '2.0.0' },
-      { capabilities: { tools: {} } },
-    )
-
-    server.setRequestHandler(ListToolsRequestSchema, () => {
-      const config = this.config
-      const registryNow = this.registry
-      if (!config || !registryNow) return { tools: [] }
-      return {
-        tools: buildMcpToolViews(config, registryNow).map((view) => ({
-          name: view.name,
-          description: view.description,
-          inputSchema: view.inputSchema,
-          annotations: view.annotations,
-        })),
+        trace.authResult = 'accepted'
       }
-    })
-
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const name = request.params.name
-      const args = (request.params.arguments ?? {}) as Record<string, unknown>
-      const result = await this.dispatchToolCall(name, args, profileId, resolveWorkspaceContext, registry)
-      const text = result.text ?? JSON.stringify(result.ok ? (result.data ?? {}) : (result.error ?? { ok: false }))
-      return {
-        content: [{ type: 'text', text }],
-        ...(result.ok && result.data ? { structuredContent: result.data } : {}),
-        isError: !result.ok,
+      let body: unknown
+      if (req.method === 'POST') {
+        try { body = await readJsonBody(req) } catch {
+          res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Invalid JSON or body too large' } }))
+          return
+        }
+        const rpc = body as { method?: unknown; params?: { protocolVersion?: unknown; _meta?: Record<string, unknown> } } | null
+        trace.jsonRpcMethod = typeof rpc?.method === 'string' ? rpc.method.slice(0, 100) : undefined
+        const version = rpc?.params?._meta?.['io.modelcontextprotocol/protocolVersion'] ?? req.headers['mcp-protocol-version'] ?? rpc?.params?.protocolVersion
+        trace.protocolVersion = typeof version === 'string' ? version.slice(0, 40) : undefined
       }
-    })
-    return server
-  }
-
-  /** 首次 POST（initialize）：为该客户端创建独立 transport + MCP Server 实例，绑定 endpoint 作用域 */
-  private async handleInitialize(req: IncomingMessage, res: ServerResponse, body: unknown, profileId?: string): Promise<void> {
-    const server = this.createConfiguredServer(profileId)
-    if (!server) {
-      res.writeHead(503).end()
-      return
-    }
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (sessionId: string) => {
-        this.sessions.set(sessionId, { transport, server, createdAt: Date.now(), lastUsedAt: Date.now(), profileId })
-      },
-      onsessionclosed: (sessionId: string) => {
-        this.sessions.delete(sessionId)
-      },
-    })
-    await server.connect(transport)
-    await transport.handleRequest(req, res, body)
-  }
-
-  /**
-   * 现代无状态请求（V5 §11）：tools/list / tools/call 等不带 Mcp-Session-Id 的
-   * JSON-RPC 请求，按每次请求独立的 stateless transport 处理（SDK 官方 stateless
-   * 模式：sessionIdGenerator 为 undefined），请求结束即释放，不维护会话。
-   */
-  private async handleStatelessRequest(req: IncomingMessage, res: ServerResponse, body: unknown, profileId?: string): Promise<void> {
-    const server = this.createConfiguredServer(profileId)
-    if (!server) {
-      res.writeHead(503).end()
-      return
-    }
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined, // stateless 模式
-    })
-    try {
-      await server.connect(transport)
-      await transport.handleRequest(req, res, body)
-    } finally {
-      try { await transport.close() } catch { /* 一次性请求 */ }
+      const legacy = await usesLegacyProtocol(req, body)
+      trace.protocolEra = legacy ? 'legacy' : 'modern'
+      if (legacy) {
+        await this.legacy.handle(req, res, body, scope.profileId, this.toolHandlers(scope.profileId))
+      } else {
+        const key = scope.profileId ?? ''
+        let handler = this.modern.get(key)
+        if (!handler) { handler = createModernServer(this.toolHandlers(scope.profileId)); this.modern.set(key, handler) }
+        await handler.handle(req, res, body)
+      }
+    } catch {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32603, message: 'Internal MCP error' } }))
+      } else if (!res.writableEnded) res.end()
     }
   }
 
@@ -424,7 +302,13 @@ export class PromaMcpServer {
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = []
-  for await (const chunk of req) chunks.push(chunk as Buffer)
+  let size = 0
+  for await (const chunk of req) {
+    const buffer = Buffer.from(chunk)
+    size += buffer.length
+    if (size > 1024 * 1024) throw new Error('MCP 请求超过 1 MiB')
+    chunks.push(buffer)
+  }
   const raw = Buffer.concat(chunks).toString('utf8')
   return raw ? JSON.parse(raw) : undefined
 }

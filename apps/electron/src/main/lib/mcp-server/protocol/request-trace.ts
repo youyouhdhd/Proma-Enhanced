@@ -6,6 +6,7 @@
  * 绝不记录：Authorization、Cookie、Runtime API Key、Local Bearer、工具参数、文件内容。
  */
 
+import { isSpecType } from '@modelcontextprotocol/server'
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http'
 import type { PromaMcpMethodStats, PromaMcpRequestTrace } from '@proma/shared'
 
@@ -32,68 +33,67 @@ export function extractSafeRequestMetadata(headers: IncomingHttpHeaders): SafeRe
   return Object.keys(metadata).length > 0 ? metadata : undefined
 }
 
-/** 捕获响应状态码（transport 在内部调用 writeHead） */
-export function captureStatusCode(res: ServerResponse): void {
-  const originalWriteHead = res.writeHead.bind(res)
-  const state = res as ServerResponse & { __promaStatus?: number }
-  res.writeHead = ((...args: unknown[]) => {
-    const status = args[0]
-    if (typeof status === 'number') state.__promaStatus = status
-    return (originalWriteHead as (...a: unknown[]) => unknown)(...args)
-  }) as typeof res.writeHead
-}
-
-export function getCapturedStatusCode(res: ServerResponse): number {
-  const state = res as ServerResponse & { __promaStatus?: number }
-  return state.__promaStatus ?? 200
-}
-
-export interface CapturedRpcError {
-  code: number
-  message: string
-}
-
-/**
- * 捕获 JSON 响应体以提取 JSON-RPC error code（V7 §20/§21）。
- * HTTP 200 也可能携带 RPC error（如 -32601），不能只看 HTTP status。
- * 只保留 error code + 截断 message，不保存完整响应。
- */
-export function captureJsonRpcError(res: ServerResponse, onError: (err: CapturedRpcError) => void): void {
-  const chunks: Buffer[] = []
-  let totalSize = 0
-  const state = res as ServerResponse & { __promaBodyHooked?: boolean }
-  if (state.__promaBodyHooked) return
-  state.__promaBodyHooked = true
-  const originalWrite = res.write.bind(res) as typeof res.write
-  res.write = ((chunk: unknown, ...rest: unknown[]) => {
-    if (typeof chunk === 'string' || Buffer.isBuffer(chunk)) {
-      const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
-      totalSize += buffer.length
-      if (totalSize <= 64 * 1024) chunks.push(buffer)
-    }
-    return (originalWrite as (...writeArgs: unknown[]) => boolean)(chunk, ...rest)
-  }) as typeof res.write
-  const originalEnd = res.end.bind(res) as typeof res.end
-  res.end = ((...args: unknown[]) => {
-    for (const arg of args) {
-      if (typeof arg === 'string' || Buffer.isBuffer(arg)) {
-        const buffer = typeof arg === 'string' ? Buffer.from(arg) : arg
-        totalSize += buffer.length
-        if (totalSize <= 64 * 1024) chunks.push(buffer)
-      }
-    }
+/** 仅保留结构化结果证据；错误原文、工具内容不进入 trace。 */
+export function captureRpcResponse(res: ServerResponse): () => Partial<PromaMcpRequestTrace> {
+  let buffer = ''
+  let overflow = false
+  const summary: Partial<PromaMcpRequestTrace> = {}
+  const parse = (raw: string): void => {
     try {
-      const raw = Buffer.concat(chunks).toString('utf8')
-      const parsed = JSON.parse(raw) as { error?: { code?: unknown; message?: unknown } }
-      if (parsed?.error && typeof parsed.error.code === 'number') {
-        onError({
-          code: parsed.error.code,
-          message: typeof parsed.error.message === 'string' ? parsed.error.message.slice(0, 200) : '',
-        })
+      const value: unknown = JSON.parse(raw)
+      if (!value || typeof value !== 'object') return
+      const rpc = value as { result?: unknown; error?: { code?: unknown; message?: unknown } }
+      if (typeof rpc.error?.code === 'number') {
+        summary.rpcErrorCode = rpc.error.code
+        // 原文仅用于映射安全枚举，绝不持久化或返回给 UI。
+        const message = typeof rpc.error.message === 'string' ? rpc.error.message.toLowerCase() : ''
+        summary.responseReason = message.includes('accept') ? 'accept-not-supported'
+          : message.includes('content-type') ? 'content-type-not-supported'
+          : message.includes('version') ? 'protocol-version-rejected' : 'transport-rejected'
+      } else if (rpc.result !== undefined) {
+        summary.rpcResultOk = true
+        if (isSpecType.ListToolsResult(rpc.result)) {
+          summary.toolCount = rpc.result.tools.length
+          summary.schemaValidated = true
+        }
+        if (isSpecType.DiscoverResult(rpc.result)) summary.discoverValidated = true
+        if (rpc.result && typeof rpc.result === 'object' && 'isError' in rpc.result) {
+          summary.toolCallOk = rpc.result.isError !== true
+        }
       }
-    } catch { /* 非 JSON 响应（SSE 流等）不解析 */ }
-    return (originalEnd as (...endArgs: unknown[]) => ServerResponse)(...args)
+    } catch { /* 不完整帧或非 JSON */ }
+  }
+  const consume = (chunk: unknown): void => {
+    if (overflow || !(typeof chunk === 'string' || chunk instanceof Uint8Array)) return
+    buffer += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
+    if (Buffer.byteLength(buffer) > 256 * 1024) { buffer = ''; overflow = true; return }
+    if (String(res.getHeader('content-type')).includes('text/event-stream')) {
+      const frames = buffer.split(/\r?\n\r?\n/)
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) {
+        const data = frame.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n')
+        if (data) parse(data)
+      }
+    }
+  }
+  const originalWrite = res.write.bind(res)
+  res.write = ((chunk: unknown, ...rest: unknown[]) => {
+    consume(chunk)
+    return (originalWrite as (...args: unknown[]) => boolean)(chunk, ...rest)
+  }) as typeof res.write
+  const originalEnd = res.end.bind(res)
+  res.end = ((...args: unknown[]) => {
+    consume(args[0])
+    if (!overflow && buffer) parse(buffer)
+    buffer = ''
+    return (originalEnd as (...args: unknown[]) => ServerResponse)(...args)
   }) as typeof res.end
+  return () => ({
+    ...summary,
+    ...(!summary.responseReason && res.statusCode >= 400 ? {
+      responseReason: res.statusCode === 406 ? 'accept-not-supported' : res.statusCode === 415 ? 'content-type-not-supported' : 'unknown',
+    } as const : {}),
+  })
 }
 
 /** 已知 MCP 方法分类（V7 §6） */
@@ -103,8 +103,8 @@ const KNOWN_METHODS = ['server/discover', 'initialize', 'notifications/initializ
 export function computeMethodStats(traces: PromaMcpRequestTrace[]): PromaMcpMethodStats {
   const stats: PromaMcpMethodStats = {
     total: traces.length,
-    methods: {},
-    statuses: {},
+    methods: Object.create(null) as Record<string, number>,
+    statuses: Object.create(null) as Record<string, number>,
     discoverCount: 0,
     initializeCount: 0,
     toolsListCount: 0,
@@ -117,7 +117,7 @@ export function computeMethodStats(traces: PromaMcpRequestTrace[]): PromaMcpMeth
     const statusKey = String(trace.statusCode)
     stats.statuses[statusKey] = (stats.statuses[statusKey] ?? 0) + 1
     if (trace.jsonRpcMethod === 'server/discover') stats.discoverCount += 1
-    else if (trace.jsonRpcMethod === 'initialize' || trace.jsonRpcMethod === 'notifications/initialized') stats.initializeCount += 1
+    else if (trace.jsonRpcMethod === 'initialize') stats.initializeCount += 1
     else if (trace.jsonRpcMethod === 'tools/list') stats.toolsListCount += 1
     else if (trace.jsonRpcMethod === 'tools/call') stats.toolsCallCount += 1
     else if (trace.jsonRpcMethod !== undefined && !KNOWN_METHODS.includes(trace.jsonRpcMethod as (typeof KNOWN_METHODS)[number])) stats.unknownCount += 1

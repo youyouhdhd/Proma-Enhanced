@@ -114,6 +114,9 @@ export interface PromaMcpWorkspaceSummary {
 
 /** MCP Server 运行状态 */
 export interface PromaMcpServerStatus {
+  appVersion?: string
+  mcpProtocolVersion?: string
+  protocolDebug?: { startedAt: number; expiresAt: number; active: boolean }
   running: boolean
   host: string
   port: number
@@ -232,6 +235,15 @@ export interface PromaMcpTunnelDoctorResult {
 
 /** 单条 MCP 请求观测记录（V5 §10；不含任何敏感头 / 参数） */
 export interface PromaMcpRequestTrace {
+  completed?: boolean
+  protocolEra?: 'modern' | 'legacy'
+  sessionEvent?: 'created' | 'used' | 'closed'
+  rpcResultOk?: boolean
+  discoverValidated?: boolean
+  toolCallOk?: boolean
+  toolCount?: number
+  schemaValidated?: boolean
+  responseReason?: 'accept-not-supported' | 'content-type-not-supported' | 'transport-rejected' | 'protocol-version-rejected' | 'unknown'
   at: number
   method: string
   path: string
@@ -267,13 +279,41 @@ export interface PromaMcpMethodStats {
 }
 
 /** ChatGPT Connector 创建失败时的端到端诊断（V5 §13） */
+export type PromaMcpProtocolEra = 'unknown' | 'modern' | 'legacy' | 'mixed'
+
+export interface PromaMcpProtocolNegotiation {
+  era: PromaMcpProtocolEra
+  discoverSeen: boolean
+  discoverHttpOk: boolean
+  discoverRpcOk: boolean
+  initializeSeen: boolean
+  initializedNotificationSeen: boolean
+  toolsListSeen: boolean
+  fallbackDetected: boolean
+}
+
+export interface ToolDiscoveryState {
+  requested: boolean
+  httpOk: boolean
+  rpcOk: boolean
+  ok: boolean
+  toolCount?: number
+  schemaValidated?: boolean
+}
+
 export interface PromaMcpConnectorDiagnosis {
+  protocolNegotiation?: PromaMcpProtocolNegotiation
+  transport?: { http406Count: number; rejectedRequests: PromaMcpRequestTrace[] }
+  toolDiscovery?: ToolDiscoveryState
+  toolCallOk?: boolean
+  connectorReady?: boolean
+  traces?: PromaMcpRequestTrace[]
   generatedAt: number
   /** 诊断窗口起点（V6 §28）：只统计该时间之后的请求，避免历史干扰 */
   windowStartedAt: number
   checks: Array<{ name: string; state: PromaMcpDiagnosticState; message?: string }>
   /** CASE A：请求未到达；CASE B-AUTH：被本机认证拒绝；CASE B-DISCOVER：server/discover 失败；CASE B-HANDSHAKE：discovery 前置完成但未进 tools/list；CASE B-PROTOCOL：tools/list 失败；CASE C：tools/list 200 */
-  conclusion?: { id: 'A' | 'B-AUTH' | 'B-DISCOVER' | 'B-HANDSHAKE' | 'B-PROTOCOL' | 'C' | 'OK'; title: string; detail: string; action?: string }
+  conclusion?: { id: 'A' | 'B-AUTH' | 'B-DISCOVER' | 'B-HANDSHAKE' | 'B-ERA-FALLBACK' | 'B-TRANSPORT' | 'B-PROTOCOL' | 'C' | 'OK'; title: string; detail: string; action?: string }
   /** 请求方法直方图（V7 §6） */
   stats: PromaMcpMethodStats
 }
@@ -297,6 +337,7 @@ export const MCP_TUNNEL_IPC_CHANNELS = {
 // ===== IPC 通道 =====
 
 export const MCP_SERVER_IPC_CHANNELS = {
+  START_PROTOCOL_DEBUG: 'mcp-server:start-protocol-debug',
   GET_STATUS: 'mcp-server:get-status',
   START: 'mcp-server:start',
   STOP: 'mcp-server:stop',

@@ -4,7 +4,7 @@
  * 零依赖实现：递归扫描 + 简单 glob→regex 转换；跳过 node_modules/.git 与二进制文件。
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, lstatSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { guardWorkspacePath } from './security'
 import { toolOk, toolError } from './types'
@@ -26,7 +26,8 @@ function walkFiles(root: string, dir: string, out: string[], limit = 4000): void
     if (IGNORED_DIRS.has(name)) continue
     const full = join(dir, name)
     let stat
-    try { stat = statSync(full) } catch { continue }
+    try { stat = lstatSync(full) } catch { continue }
+    if (stat.isSymbolicLink()) continue // 禁止递归跟随符号链接/junction（含循环和外部目录）
     if (stat.isDirectory()) walkFiles(root, full, out, limit)
     else if (stat.isFile()) out.push(full)
   }

@@ -391,6 +391,7 @@ export interface ElectronAPI {
   runMcpTunnelDoctor: () => Promise<import('@proma/shared').PromaMcpTunnelDoctorResult>
 
   /** ChatGPT Connector 创建失败时的端到端诊断（逐层检查 + CASE A/B/C 结论） */
+  startMcpProtocolDebug: () => Promise<import('@proma/shared').PromaMcpServerStatus>
   diagnoseMcpConnector: (windowStartedAt?: number) => Promise<import('@proma/shared').PromaMcpConnectorDiagnosis>
 
   /** 清除已保存的 Runtime API Key（UI 二次确认后调用） */
@@ -1471,7 +1472,7 @@ export interface ElectronAPI {
  * 实现 ElectronAPI 接口
  */
 const electronAPI: ElectronAPI = {
-  bridgeVersion: 6,
+  bridgeVersion: 8,
 
   // 运行时
   getRuntimeStatus: () => {
@@ -1744,6 +1745,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.RUN_DOCTOR)
   },
 
+  startMcpProtocolDebug: () => ipcRenderer.invoke(MCP_SERVER_IPC_CHANNELS.START_PROTOCOL_DEBUG),
   diagnoseMcpConnector: (windowStartedAt?: number) => {
     return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.DIAGNOSE_CONNECTOR, windowStartedAt)
   },

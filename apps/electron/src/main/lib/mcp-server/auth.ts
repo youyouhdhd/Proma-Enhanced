@@ -11,7 +11,7 @@ export function isRequestAuthorized(
   authorizationHeader: IncomingHttpHeaders['authorization'],
 ): boolean {
   if (auth.type === 'none') return true
-  if (!expectedToken) return true // 无法解析到期望 token 时按放行处理，避免整服务不可用
+  if (!expectedToken) return false // 凭据缺失或解密失败时必须拒绝
   const provided = typeof authorizationHeader === 'string' ? authorizationHeader : ''
   const match = /^Bearer\s+(.+)$/.exec(provided)
   if (!match) return false

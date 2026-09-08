@@ -76,9 +76,9 @@ describe('preload 能力检测（TC-BLANK-03 + §24）', () => {
     expect(capabilities.getState).toBe(false)
   })
 
-  it('bridge 版本判定：无法读取视为兼容，过旧时要求 ≥ 6', () => {
+  it('bridge 版本判定：无法读取视为兼容，过旧时要求 ≥ 8', () => {
     expect(isBridgeOutdated({ bridgeVersion: null, getState: false, stateEvents: false, installClient: false, detectClient: false, doctor: false, saveConfig: false, pickExecutable: false })).toBe(false)
     expect(isBridgeOutdated({ bridgeVersion: 2, getState: false, stateEvents: false, installClient: false, detectClient: false, doctor: false, saveConfig: false, pickExecutable: false })).toBe(true)
-    expect(REQUIRED_MCP_BRIDGE_VERSION).toBe(6)
+    expect(REQUIRED_MCP_BRIDGE_VERSION).toBe(8)
   })
 })

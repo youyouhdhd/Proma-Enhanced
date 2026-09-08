@@ -22,7 +22,24 @@ permissions:
   contents: write
 
 jobs:
+  verify-mcp:
+    name: MCP 协议与工程验证
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run --filter='@proma/electron' check:renderer-boundaries
+
   build-mac-arm64:
+    needs: verify-mcp
     name: build (macos-latest, mac, arm64, --arm64)
     runs-on: macos-latest
 
@@ -97,7 +114,7 @@ jobs:
             export CSC_IDENTITY_AUTO_DISCOVERY=false
           fi
           for i in 1 2 3; do
-            if npx electron-builder --mac --arm64 --publish always; then
+            if bunx electron-builder --mac --arm64 --publish always; then
               exit 0
             fi
 
@@ -112,6 +129,7 @@ jobs:
         working-directory: apps/electron
 
   build-mac-x64:
+    needs: verify-mcp
     name: build (macos-15-intel, mac, x64, --x64)
     runs-on: macos-15-intel
 
@@ -186,7 +204,7 @@ jobs:
             export CSC_IDENTITY_AUTO_DISCOVERY=false
           fi
           for i in 1 2 3; do
-            if npx electron-builder --mac --x64 --publish always; then
+            if bunx electron-builder --mac --x64 --publish always; then
               exit 0
             fi
 
@@ -337,6 +355,7 @@ jobs:
           echo "✅ latest-mac.yml merged and uploaded"
 
   build-linux-x64:
+    needs: verify-mcp
     name: build (ubuntu-22.04, linux, x64)
     runs-on: ubuntu-22.04
 
@@ -377,10 +396,11 @@ jobs:
       - name: 打包并发布 (Linux x64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --linux --x64 --publish always
+        run: bunx electron-builder --linux --x64 --publish always
         working-directory: apps/electron
 
   build-windows-x64:
+    needs: verify-mcp
     name: build (windows-latest, win, x64, --x64)
     runs-on: windows-latest
 
@@ -418,5 +438,5 @@ jobs:
       - name: 打包并发布 (Windows)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --x64 --publish always
+        run: bunx electron-builder --win --x64 --publish always
         working-directory: apps/electron

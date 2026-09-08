@@ -4,7 +4,7 @@
  * 全部经 guardWorkspacePath 守卫（resolve + realpath 双重包含检查）。
  */
 
-import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync, statSync, lstatSync, mkdirSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { guardWorkspacePath, ensureParentDir } from './security'
 import { toolOk, toolError } from './types'
@@ -49,7 +49,11 @@ export const listFilesTool: LocalToolDefinition = {
         if (IGNORED.has(name)) continue
         const full = join(dir, name)
         let isDir = false
-        try { isDir = statSync(full).isDirectory() } catch { continue }
+        try {
+          const entryStat = lstatSync(full)
+          if (entryStat.isSymbolicLink()) continue // 包括 Windows junction，递归不可越过工作区边界
+          isDir = entryStat.isDirectory()
+        } catch { continue }
         const rel = relative(context.rootPath, full).split('\\').join('/')
         entries.push({ name, path: rel, type: isDir ? 'dir' : 'file' })
         if (isDir) walk(full, level + 1)

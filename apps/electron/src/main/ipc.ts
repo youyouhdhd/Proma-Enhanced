@@ -1785,6 +1785,7 @@ export function registerIpcHandlers(): void {
    )
 
   // ===== PROMA MCP Server（本地能力服务器，供外部 MCP Client 调用） =====
+  ipcMain.handle(MCP_SERVER_IPC_CHANNELS.START_PROTOCOL_DEBUG, () => promaMcpServerService.startProtocolDebug())
 
   // 获取运行状态
   ipcMain.handle(

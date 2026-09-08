@@ -24,6 +24,7 @@ import { classifyClientFailure, openAiTunnelClientAdapter } from './tunnel-clien
 import { TunnelProcessRunner } from './tunnel-process-runner'
 import { classifyConnectorConclusion } from './tunnel-doctor-parser'
 import { computeMethodStats } from './protocol/request-trace'
+import { analyzeProtocol, rpcSucceeded } from './protocol/protocol-negotiation'
 import type { TunnelRuntimeConfig } from './tunnel-client-types'
 
 const READY_POLL_INTERVAL_MS = 1_000
@@ -473,7 +474,7 @@ class McpTunnelService {
         : (detection.errorMessage ?? '未安装'),
     })
     // 4. Runtime Key
-    const keyConfigured = this.hasRuntimeKey()
+    const keyConfigured = this.getRuntimeKeyStatus() === 'available'
     checks.push({ name: 'Runtime API Key', state: keyConfigured ? 'pass' : 'fail', message: keyConfigured ? '已安全保存' : '尚未保存（请完成步骤 5）' })
     // 5. Doctor
     let doctorOk = false
@@ -494,9 +495,7 @@ class McpTunnelService {
       checks.push({ name: 'Doctor 诊断', state: 'skipped', message: '前置条件未满足' })
     }
     // 6. /readyz
-    if (this.state.phase === 'connected') {
-      checks.push({ name: 'Secure Tunnel /readyz', state: 'pass', message: 'HTTP 200' })
-    } else if (this.state.healthUrl) {
+    if (this.state.healthUrl) {
       try {
         const ready = await fetch(new URL('/readyz', this.state.healthUrl), { signal: AbortSignal.timeout(2_000) })
         checks.push({ name: 'Secure Tunnel /readyz', state: ready.status === 200 ? 'pass' : 'fail', message: 'HTTP ' + ready.status })
@@ -508,10 +507,13 @@ class McpTunnelService {
     }
     // 7-9. 最近 MCP 请求 / tools/list
     const windowStart = windowStartedAt ?? (Date.now() - 5 * 60 * 1000)
-    const recent = mcpStatus.recentRequests.filter((r) => r.at >= windowStart)
+    const snapshot = promaMcpServerService.getStatus()
+    const windowEnd = snapshot.protocolDebug?.startedAt === windowStart ? snapshot.protocolDebug.expiresAt : Date.now()
+    const recent = snapshot.recentRequests.filter((r) => r.path.startsWith('/mcp') && r.at >= windowStart && r.at <= windowEnd)
+    const protocol = analyzeProtocol(recent, checks.some((c) => c.name === 'Secure Tunnel /readyz' && c.state === 'pass'))
     checks.push({ name: '诊断窗口内收到 MCP 请求', state: recent.length > 0 ? 'pass' : 'unknown', message: recent.length > 0 ? recent.length + ' 条' : '未收到任何请求' })
     const toolsList = recent.filter((r) => r.jsonRpcMethod === 'tools/list')
-    checks.push({ name: 'tools/list 请求', state: toolsList.length > 0 ? (toolsList.some((r) => r.statusCode === 200) ? 'pass' : 'fail') : 'unknown', message: toolsList.length > 0 ? toolsList.map((r) => r.statusCode).join(', ') : '未收到 tools/list' })
+    checks.push({ name: 'tools/list 请求', state: toolsList.length > 0 ? (toolsList.some((r) => rpcSucceeded(r) && r.schemaValidated) ? 'pass' : 'fail') : 'unknown', message: toolsList.length > 0 ? toolsList.map((r) => r.statusCode).join(', ') : '未收到 tools/list' })
 
     // V6 §17：HTTP 401/403 是 PROMA 语义错误，不只是「可达」
     const reachableMessage = doctorMcpReachableMessage ?? ''
@@ -524,15 +526,16 @@ class McpTunnelService {
     }
 
     const conclusion = classifyConnectorConclusion({
+      protocol,
       recentCount: recent.length,
       allRejected: recent.every((r) => r.authResult === 'rejected' || r.statusCode === 401 || r.statusCode === 403),
       discoverCount: recent.filter((r) => r.jsonRpcMethod === 'server/discover').length,
-      discoverOk: recent.some((r) => r.jsonRpcMethod === 'server/discover' && r.statusCode === 200 && !r.rpcErrorCode),
+      discoverOk: recent.some((r) => r.jsonRpcMethod === 'server/discover' && rpcSucceeded(r) && r.discoverValidated),
       toolsListCount: toolsList.length,
-      toolsListOk: toolsList.some((r) => r.statusCode === 200),
+      toolsListOk: toolsList.some((r) => rpcSucceeded(r) && r.schemaValidated),
       doctorOk,
     })
-    return { generatedAt: Date.now(), windowStartedAt: windowStart, checks, conclusion, stats: computeMethodStats(recent) }
+    return { generatedAt: Date.now(), windowStartedAt: windowStart, checks, conclusion, stats: computeMethodStats(recent), ...protocol, traces: recent }
   }
 
   // ===== 内部 =====

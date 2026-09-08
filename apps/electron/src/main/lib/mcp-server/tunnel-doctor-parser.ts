@@ -133,6 +133,7 @@ export function computeBlockingFailures(parsed: ParsedDoctorCheck[], knownFailur
 
 /** Connector 结论归类（V6 §20；纯函数便于回归测试） */
 export interface ConnectorConclusionInput {
+  protocol?: Pick<PromaMcpConnectorDiagnosis, 'protocolNegotiation' | 'transport' | 'toolDiscovery' | 'connectorReady'>
   recentCount: number
   allRejected: boolean
   /** server/discover 请求条数（V7 §8） */
@@ -172,21 +173,27 @@ export function classifyConnectorConclusion(
       action: '更新 PROMA MCP Discovery compatibility 后重试',
     }
   }
-  // V7 §8：CASE B-HANDSHAKE —— discovery 前置完成但未进入 Tool Discovery
+  if (input.protocol?.protocolNegotiation?.fallbackDetected) {
+    return { id: 'B-ERA-FALLBACK', title: 'CASE B-ERA-FALLBACK：Modern → Legacy fallback', detail: 'Discovery 已响应，但同一端点随后进入 initialize/session 流程。请结合本次调试时间线确认是否来自同一客户端；协议响应或 Transport 兼容性需要检查。', action: '复制协议诊断；无需重新创建 Tunnel、Runtime API Key 或 Role' }
+  }
+  if ((input.protocol?.transport?.rejectedRequests.length ?? 0) > 0) {
+    return { id: 'B-TRANSPORT', title: 'CASE B-TRANSPORT：MCP Transport 拒绝请求协商', detail: '请求已经到达 PROMA，请查看被拒绝请求的 Accept、Content-Type、协议版本与安全原因。', action: '复制协议诊断以修复协议兼容性；无需重建 Tunnel 或密钥' }
+  }
+  // HTTP 响应不等于客户端接受协议。
   if (input.discoverOk && input.toolsListCount === 0) {
     return {
       id: 'B-HANDSHAKE',
       title: 'CASE B-HANDSHAKE：Discovery 前置阶段完成，但未进入 Tool Discovery',
-      detail: 'server/discover 已成功，但 ChatGPT 未发送 tools/list。请检查 protocol negotiation / capabilities / response metadata。',
-      action: '重试创建 Connector；若持续失败请导出诊断信息',
+      detail: 'Discovery 已响应，但尚未确认客户端接受协议，也未收到 tools/list。',
+      action: '复制协议诊断；无需重新创建 Tunnel、Runtime API Key 或 Role',
     }
   }
   if (input.toolsListCount === 0) {
     return {
-      id: 'A',
-      title: 'CASE A：收到了请求但没有 tools/list',
-      detail: 'ChatGPT 侧的 discovery 尚未发起 tools/list。请确认 Connector 创建流程走到了「扫描 Tools」一步，然后重试。',
-      action: '在 ChatGPT 重新创建 Connector',
+      id: 'B-HANDSHAKE',
+      title: 'CASE B-HANDSHAKE：收到了请求，但未进入工具发现',
+      detail: '协议握手或前置请求尚未完成，不能据此判断 Connector 已就绪。',
+      action: '复制协议诊断以定位请求停止的阶段',
     }
   }
   if (!input.toolsListOk) {
@@ -194,14 +201,14 @@ export function classifyConnectorConclusion(
       id: 'B-PROTOCOL',
       title: 'CASE B-PROTOCOL：tools/list 返回失败',
       detail: '问题位于 PROMA MCP 协议 / Tool Schema 层。请展开技术详情查看状态码，并把最近请求反馈给开发者。',
-      action: '重试一次；若持续失败请导出诊断信息',
+      action: '复制协议诊断以检查 RPC 错误和工具 schema',
     }
   }
-  if (!input.doctorOk) {
+  if (!input.doctorOk || (input.protocol && !input.protocol.connectorReady)) {
     return {
       id: 'C',
-      title: 'CASE C：tools/list 已成功但 Doctor 仍有失败项',
-      detail: 'MCP discovery 正常；请按上方 Doctor 失败项处理（通常是 Runtime Key 权限或网络）。',
+      title: 'CASE C：工具发现成功，Connector 就绪尚未确认',
+      detail: '请检查协议时代和 Tunnel readiness。服务端工具列表成功不代表 ChatGPT 已创建 App。',
       action: '按 Doctor 失败项提示处理',
     }
   }
