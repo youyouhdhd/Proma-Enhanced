@@ -393,6 +393,7 @@ export interface ElectronAPI {
   /** ChatGPT Connector 创建失败时的端到端诊断（逐层检查 + CASE A/B/C 结论） */
   startMcpProtocolDebug: () => Promise<import('@proma/shared').PromaMcpServerStatus>
   diagnoseMcpConnector: (windowStartedAt?: number) => Promise<import('@proma/shared').PromaMcpConnectorDiagnosis>
+  openMcpTunnelLogs: () => Promise<void>
 
   /** 清除已保存的 Runtime API Key（UI 二次确认后调用） */
   clearMcpTunnelRuntimeKey: () => Promise<import('@proma/shared').PromaMcpTunnelState>
@@ -1472,7 +1473,7 @@ export interface ElectronAPI {
  * 实现 ElectronAPI 接口
  */
 const electronAPI: ElectronAPI = {
-  bridgeVersion: 8,
+  bridgeVersion: 9,
 
   // 运行时
   getRuntimeStatus: () => {
@@ -1749,6 +1750,7 @@ const electronAPI: ElectronAPI = {
   diagnoseMcpConnector: (windowStartedAt?: number) => {
     return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.DIAGNOSE_CONNECTOR, windowStartedAt)
   },
+  openMcpTunnelLogs: () => ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.OPEN_LOGS),
 
   clearMcpTunnelRuntimeKey: () => {
     return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.CLEAR_RUNTIME_KEY)

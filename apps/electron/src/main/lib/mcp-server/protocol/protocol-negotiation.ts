@@ -5,7 +5,22 @@ export function rpcSucceeded(trace: PromaMcpRequestTrace): boolean {
   return trace.completed === true && trace.statusCode >= 200 && trace.statusCode < 300 && trace.rpcErrorCode === undefined && trace.rpcResultOk === true
 }
 
-export function analyzeProtocol(traces: PromaMcpRequestTrace[], tunnelReady: boolean): Pick<PromaMcpConnectorDiagnosis, 'protocolNegotiation' | 'transport' | 'toolDiscovery' | 'connectorReady' | 'toolCallOk'> {
+export function isConnectorRpc(trace: PromaMcpRequestTrace): boolean {
+  return trace.requestKind === 'mcp-rpc' && (trace.requestSource === 'connector-forwarded' || trace.requestSource === 'unknown')
+}
+
+export function analyzeProtocol(allTraces: PromaMcpRequestTrace[], tunnelReady: boolean): Pick<PromaMcpConnectorDiagnosis, 'protocolNegotiation' | 'transport' | 'toolDiscovery' | 'connectorReady' | 'toolCallOk' | 'traffic'> {
+  const traces = allTraces.filter(isConnectorRpc)
+  const count = (kind: PromaMcpRequestTrace['requestKind']): number => allTraces.filter((t) => t.requestKind === kind).length
+  const traffic = {
+    totalHttpCount: allTraces.length,
+    connectorRpcCount: traces.filter((t) => t.requestSource === 'connector-forwarded').length,
+    unattributedRpcCount: traces.filter((t) => t.requestSource === 'unknown').length,
+    localRpcCount: allTraces.filter((t) => t.requestKind === 'mcp-rpc' && t.requestSource === 'local-mcp-client').length,
+    internalProbeCount: allTraces.filter((t) => t.requestSource === 'tunnel-client-internal' && (t.requestKind === 'oauth-probe' || t.requestKind === 'oauth-well-known')).length,
+    oauthProbeCount: count('oauth-probe'),
+    oauthWellKnownCount: count('oauth-well-known'),
+  }
   const discover = traces.filter((t) => t.jsonRpcMethod === 'server/discover')
   const initialize = traces.filter((t) => t.jsonRpcMethod === 'initialize')
   const lists = traces.filter((t) => t.jsonRpcMethod === 'tools/list')
@@ -32,10 +47,13 @@ export function analyzeProtocol(traces: PromaMcpRequestTrace[], tunnelReady: boo
   }
   const rejectedRequests = traces.filter((t) => t.statusCode === 406 || t.statusCode === 415 || t.responseReason === 'protocol-version-rejected')
   return {
+    traffic,
     protocolNegotiation,
     transport: { http406Count: traces.filter((t) => t.method === 'POST' && t.statusCode === 406).length, rejectedRequests },
     toolDiscovery,
-    toolCallOk: traces.some((t) => t.jsonRpcMethod === 'tools/call' && rpcSucceeded(t) && t.toolCallOk === true),
-    connectorReady: tunnelReady && protocolNegotiation.era === 'modern' && toolDiscovery.ok && rejectedRequests.length === 0,
+    toolCallOk: traces.some((t) => t.requestSource === 'connector-forwarded' && t.jsonRpcMethod === 'tools/call' && rpcSucceeded(t) && t.toolCallOk === true),
+    connectorReady: tunnelReady && protocolNegotiation.era === 'modern' && toolDiscovery.ok && rejectedRequests.length === 0
+      && discover.some((d) => d.requestSource === 'connector-forwarded' && rpcSucceeded(d) && d.discoverValidated
+        && lists.some((l) => l.requestSource === 'connector-forwarded' && l.protocolEra === 'modern' && l.path === d.path && l.at >= d.at && rpcSucceeded(l) && l.schemaValidated)),
   }
 }

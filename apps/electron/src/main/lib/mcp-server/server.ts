@@ -18,6 +18,7 @@ import { captureRpcResponse, extractSafeRequestMetadata } from './protocol/reque
 import { createModernServer, MCP_SERVER_INFO, MODERN_PROTOCOL_VERSION, type McpToolHandlers } from './protocol/modern-server'
 import { LegacyMcpServer } from './protocol/legacy-server'
 import { usesLegacyProtocol } from './protocol/protocol-router'
+import { classifyRequest, readRequestBody } from './protocol/request-classifier'
 import {
   resolveTargetWorkspace,
   assertToolPermission,
@@ -193,6 +194,7 @@ export class PromaMcpServer {
 
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const trace: PromaMcpRequestTrace = {
+      requestKind: 'unknown-http', requestSource: 'unknown',
       at: Date.now(), method: req.method ?? '', path: '/mcp/unknown',
       hasSessionId: typeof req.headers['mcp-session-id'] === 'string', statusCode: 0,
       authResult: 'not-required',
@@ -214,14 +216,40 @@ export class PromaMcpServer {
       if (!config || !this.httpServer) { res.writeHead(503).end(); return }
       if (!validateHost(req, res) || !validateOrigin(req, res)) { trace.authResult = 'rejected'; return }
       const url = req.url ?? ''
+      const path = url.split('?')[0] ?? ''
+      const setClassification = (parsedBody?: Awaited<ReturnType<typeof readRequestBody>>): void => {
+        const classified = classifyRequest({ method: req.method ?? '', path, headers: req.headers, parsedBody, hasMcpSessionId: trace.hasSessionId })
+        trace.requestKind = classified.kind
+        trace.requestSource = classified.source
+        trace.sourceSignals = classified.signals
+      }
+      setClassification()
       if (url.split('?')[0] === '/health') {
         trace.path = '/health'
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ...MCP_SERVER_INFO, status: 'ok' }))
         return
       }
+      if (trace.requestKind === 'oauth-well-known') {
+        trace.path = path.replace(/(\/mcp)\/[^/]+\/?$/, '$1/:profile')
+        res.writeHead(404).end()
+        return
+      }
       const scope = this.resolveEndpointScope(url)
       if (!scope.ok) { res.writeHead(404).end(); return }
       trace.path = scope.profileId ? '/mcp/' + scope.profileId : '/mcp'
+      // 先识别有限大小的 body，认证拒绝的真实 RPC 也能正确归因；未经认证绝不调用工具。
+      const parsedBody = req.method === 'POST' ? await readRequestBody(req) : undefined
+      setClassification(parsedBody)
+      const body = parsedBody?.kind === 'json' ? parsedBody.value : undefined
+      if (trace.requestKind === 'mcp-rpc' && Array.isArray(body)) {
+        // 一次 HTTP 只记一个 trace；旧 batch 不作为 modern Discovery 就绪证据。
+        trace.jsonRpcMethod = '(batch)'
+      } else if (trace.requestKind === 'mcp-rpc') {
+        const rpc = body as { method: string; params?: { protocolVersion?: unknown; _meta?: Record<string, unknown> } }
+        trace.jsonRpcMethod = rpc.method.slice(0, 100)
+        const version = rpc.params?._meta?.['io.modelcontextprotocol/protocolVersion'] ?? req.headers['mcp-protocol-version'] ?? rpc.params?.protocolVersion
+        trace.protocolVersion = typeof version === 'string' ? version.slice(0, 40) : undefined
+      }
       if (config.auth.type !== 'none') {
         trace.authResult = 'rejected'
         if (!isRequestAuthorized(config.auth, this.resolveAuthToken?.(), req.headers.authorization)) {
@@ -230,16 +258,22 @@ export class PromaMcpServer {
         }
         trace.authResult = 'accepted'
       }
-      let body: unknown
-      if (req.method === 'POST') {
-        try { body = await readJsonBody(req) } catch {
-          res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Invalid JSON or body too large' } }))
-          return
-        }
-        const rpc = body as { method?: unknown; params?: { protocolVersion?: unknown; _meta?: Record<string, unknown> } } | null
-        trace.jsonRpcMethod = typeof rpc?.method === 'string' ? rpc.method.slice(0, 100) : undefined
-        const version = rpc?.params?._meta?.['io.modelcontextprotocol/protocolVersion'] ?? req.headers['mcp-protocol-version'] ?? rpc?.params?.protocolVersion
-        trace.protocolVersion = typeof version === 'string' ? version.slice(0, 40) : undefined
+      if (trace.requestKind === 'oauth-probe' && req.method === 'POST') {
+        res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'MCP request body required' }))
+        return
+      }
+      if (trace.requestKind === 'legacy-session-stream') {
+        trace.protocolEra = 'legacy'
+        await this.legacy.handle(req, res, body, scope.profileId, this.toolHandlers(scope.profileId))
+        return
+      }
+      if (trace.requestKind !== 'mcp-rpc') {
+        if (req.method !== 'POST') res.writeHead(405, { allow: 'POST' }).end()
+        else res.writeHead(parsedBody?.kind === 'too-large' ? 413 : 400, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: null, error: {
+          code: parsedBody?.kind === 'invalid-json' ? -32700 : -32600,
+          message: parsedBody?.kind === 'too-large' ? 'MCP body too large' : parsedBody?.kind === 'invalid-json' ? 'Invalid JSON' : 'MCP JSON-RPC request required',
+        } }))
+        return
       }
       const legacy = await usesLegacyProtocol(req, body)
       trace.protocolEra = legacy ? 'legacy' : 'modern'
@@ -298,17 +332,4 @@ export class PromaMcpServer {
     delete toolArgs.workspace_ids
     return definition.execute(toolArgs, ctx.context)
   }
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = []
-  let size = 0
-  for await (const chunk of req) {
-    const buffer = Buffer.from(chunk)
-    size += buffer.length
-    if (size > 1024 * 1024) throw new Error('MCP 请求超过 1 MiB')
-    chunks.push(buffer)
-  }
-  const raw = Buffer.concat(chunks).toString('utf8')
-  return raw ? JSON.parse(raw) : undefined
 }

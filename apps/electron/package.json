@@ -1,6 +1,6 @@
 {
   "name": "@proma/electron",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "Proma，为专业用户设计的 Agent",
   "main": "dist/main.cjs",
   "author": {
@@ -43,7 +43,7 @@
     "check:renderer-boundaries": "bun run scripts/check-renderer-node-globals.ts",
     "smoke:renderer-dist": "bun run scripts/smoke-renderer-dist.ts",
     "test:mcp-modern": "bun run scripts/test-modern-mcp-discovery.ts",
-    "test:mcp-wire": "bun test src/main/lib/mcp-server/protocol/mcp-wire.test.ts",
+    "test:mcp-wire": "bun test src/main/lib/mcp-server/protocol/mcp-wire.test.ts src/main/lib/mcp-server/protocol/request-classifier.test.ts",
     "test:mcp-official-client": "bun test src/main/lib/mcp-server/protocol/mcp-official-client.test.ts",
     "test:mcp-live": "bun run scripts/test-mcp-official-client.ts",
     "smoke:mcp-bundle": "bun run scripts/smoke-mcp-bundle.ts",

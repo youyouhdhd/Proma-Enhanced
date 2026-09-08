@@ -30,7 +30,9 @@ describe('V8 官方 Client 协议协商', () => {
           expect(traces.some((t) => t.jsonRpcMethod === 'initialize')).toBe(false)
           expect(traces.some((t) => t.statusCode === 406)).toBe(false)
           expect(traces.some((t) => t.discoverValidated)).toBe(true)
-          expect(analyzeProtocol(traces, true).connectorReady).toBe(true)
+          // V9：本地官方 Client 成功不能冒充 ChatGPT 转发成功。
+          expect(analyzeProtocol(traces, true).connectorReady).toBe(false)
+          expect(analyzeProtocol(traces, true).traffic?.localRpcCount).toBeGreaterThan(0)
           expect(JSON.stringify(traces)).not.toContain('fixture content')
           expect(JSON.stringify(traces)).not.toContain('../secret')
         } finally { await client.close() }

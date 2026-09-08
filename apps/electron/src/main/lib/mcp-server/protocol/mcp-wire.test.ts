@@ -83,12 +83,12 @@ describe('V8 raw HTTP（合成 fixtures，非用户历史请求）', () => {
 
   it('Given discover → initialize + 406 When 诊断 Then fallback 优先且保留 transport 警告', async () => {
     await withMcpServer(async (server, endpoint) => {
-      await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', 'mcp-protocol-version': MODERN_PROTOCOL_VERSION, 'mcp-method': 'server/discover' },
+      await fetch(endpoint, { method: 'POST', headers: { 'x-openai-subject': 'synthetic-fixture', 'content-type': 'application/json', accept: 'application/json', 'mcp-protocol-version': MODERN_PROTOCOL_VERSION, 'mcp-method': 'server/discover' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover', params: { _meta: modernMeta } }) })
       const client = new Client({ name: 'fallback-fixture', version: '1' })
       try {
-        await client.connect(new StreamableHTTPClientTransport(new URL(endpoint)))
-        await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'image/png' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) })
+        await client.connect(new StreamableHTTPClientTransport(new URL(endpoint), { requestInit: { headers: { 'x-openai-subject': 'synthetic-fixture' } } }))
+        await fetch(endpoint, { method: 'POST', headers: { 'x-openai-subject': 'synthetic-fixture', 'content-type': 'application/json', accept: 'image/png' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) })
         const traces = server.getStatus().recentRequests
         const protocol = analyzeProtocol(traces, true)
         expect(protocol.protocolNegotiation?.era).toBe('mixed')

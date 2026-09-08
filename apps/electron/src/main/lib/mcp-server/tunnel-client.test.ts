@@ -203,11 +203,11 @@ describe('OpenAiTunnelClientAdapter（CLI 契约）', () => {
 
   it('computeMethodStats：方法直方图与分类计数（V7 §6）', () => {
     const stats = computeMethodStats([
-      { at: 1, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'server/discover', statusCode: 404 },
-      { at: 2, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'server/discover', statusCode: 200 },
-      { at: 3, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'tools/list', statusCode: 200 },
-      { at: 4, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'tools/call', statusCode: 200 },
-      { at: 5, method: 'GET', path: '/mcp', hasSessionId: false, statusCode: 405 },
+      { requestKind: 'mcp-rpc', requestSource: 'connector-forwarded', at: 1, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'server/discover', statusCode: 404 },
+      { requestKind: 'mcp-rpc', requestSource: 'connector-forwarded', at: 2, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'server/discover', statusCode: 200 },
+      { requestKind: 'mcp-rpc', requestSource: 'connector-forwarded', at: 3, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'tools/list', statusCode: 200 },
+      { requestKind: 'mcp-rpc', requestSource: 'connector-forwarded', at: 4, method: 'POST', path: '/mcp', hasSessionId: false, jsonRpcMethod: 'tools/call', statusCode: 200 },
+      { requestKind: 'oauth-probe', requestSource: 'unknown', at: 5, method: 'GET', path: '/mcp', hasSessionId: false, statusCode: 405 },
     ])
     expect(stats.total).toBe(5)
     expect(stats.discoverCount).toBe(2)

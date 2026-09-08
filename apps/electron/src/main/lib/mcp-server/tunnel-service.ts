@@ -24,7 +24,7 @@ import { classifyClientFailure, openAiTunnelClientAdapter } from './tunnel-clien
 import { TunnelProcessRunner } from './tunnel-process-runner'
 import { classifyConnectorConclusion } from './tunnel-doctor-parser'
 import { computeMethodStats } from './protocol/request-trace'
-import { analyzeProtocol, rpcSucceeded } from './protocol/protocol-negotiation'
+import { analyzeProtocol, isConnectorRpc, rpcSucceeded } from './protocol/protocol-negotiation'
 import type { TunnelRuntimeConfig } from './tunnel-client-types'
 
 const READY_POLL_INTERVAL_MS = 1_000
@@ -393,6 +393,7 @@ class McpTunnelService {
   // ===== 诊断（结构化，§35/§36） =====
 
   async doctor(): Promise<PromaMcpTunnelDoctorResult> {
+    if (promaMcpServerService.getStatus().protocolDebug?.active) throw new Error('Protocol Debug 期间暂停 Doctor，避免内部探测干扰测试窗口')
     const settings = this.getConfig()
     const resolved = this.manager.resolveExecutable(settings)
     if ('error' in resolved) {
@@ -479,7 +480,7 @@ class McpTunnelService {
     // 5. Doctor
     let doctorOk = false
     let doctorMcpReachableMessage: string | undefined
-    if (detection.installed && keyConfigured && mcpStatus.running) {
+    if (windowStartedAt === undefined && !mcpStatus.protocolDebug?.active && detection.installed && keyConfigured && mcpStatus.running) {
       const doctor = await this.doctor()
       // V6 §25：阻断 Connector 的是关键检查失败（codex_plugin / ui SKIP 不算）
       doctorOk = doctor.ok && (doctor.blockingFailures?.length ?? 0) === 0
@@ -492,7 +493,7 @@ class McpTunnelService {
       }
       checks.push({ name: 'Doctor 诊断', state: doctor.ok ? 'pass' : 'fail', message: doctor.ok ? 'exit 0' : '存在失败项（见上）' })
     } else {
-      checks.push({ name: 'Doctor 诊断', state: 'skipped', message: '前置条件未满足' })
+      checks.push({ name: 'Doctor 诊断', state: 'skipped', message: windowStartedAt !== undefined || mcpStatus.protocolDebug?.active ? '协议窗口只分析已采集记录，不触发 Doctor 探测' : '前置条件未满足' })
     }
     // 6. /readyz
     if (this.state.healthUrl) {
@@ -507,12 +508,13 @@ class McpTunnelService {
     }
     // 7-9. 最近 MCP 请求 / tools/list
     const windowStart = windowStartedAt ?? (Date.now() - 5 * 60 * 1000)
-    const snapshot = promaMcpServerService.getStatus()
+    const snapshot = mcpStatus
     const windowEnd = snapshot.protocolDebug?.startedAt === windowStart ? snapshot.protocolDebug.expiresAt : Date.now()
-    const recent = snapshot.recentRequests.filter((r) => r.path.startsWith('/mcp') && r.at >= windowStart && r.at <= windowEnd)
+    const recent = snapshot.recentRequests.filter((r) => r.requestKind !== 'health' && r.at >= windowStart && r.at <= windowEnd)
     const protocol = analyzeProtocol(recent, checks.some((c) => c.name === 'Secure Tunnel /readyz' && c.state === 'pass'))
-    checks.push({ name: '诊断窗口内收到 MCP 请求', state: recent.length > 0 ? 'pass' : 'unknown', message: recent.length > 0 ? recent.length + ' 条' : '未收到任何请求' })
-    const toolsList = recent.filter((r) => r.jsonRpcMethod === 'tools/list')
+    const rpcTraces = recent.filter(isConnectorRpc)
+    checks.push({ name: 'ChatGPT Connector RPC', state: (protocol.traffic?.connectorRpcCount ?? 0) > 0 ? 'pass' : 'unknown', message: (protocol.traffic?.connectorRpcCount ?? 0) + ' 条带转发标记；' + (protocol.traffic?.unattributedRpcCount ?? 0) + ' 条来源未确认' })
+    const toolsList = rpcTraces.filter((r) => r.jsonRpcMethod === 'tools/list')
     checks.push({ name: 'tools/list 请求', state: toolsList.length > 0 ? (toolsList.some((r) => rpcSucceeded(r) && r.schemaValidated) ? 'pass' : 'fail') : 'unknown', message: toolsList.length > 0 ? toolsList.map((r) => r.statusCode).join(', ') : '未收到 tools/list' })
 
     // V6 §17：HTTP 401/403 是 PROMA 语义错误，不只是「可达」
@@ -527,15 +529,15 @@ class McpTunnelService {
 
     const conclusion = classifyConnectorConclusion({
       protocol,
-      recentCount: recent.length,
-      allRejected: recent.every((r) => r.authResult === 'rejected' || r.statusCode === 401 || r.statusCode === 403),
-      discoverCount: recent.filter((r) => r.jsonRpcMethod === 'server/discover').length,
-      discoverOk: recent.some((r) => r.jsonRpcMethod === 'server/discover' && rpcSucceeded(r) && r.discoverValidated),
+      recentCount: rpcTraces.length,
+      allRejected: rpcTraces.some((r) => r.authResult === 'rejected' || r.statusCode === 401 || r.statusCode === 403),
+      discoverCount: rpcTraces.filter((r) => r.jsonRpcMethod === 'server/discover').length,
+      discoverOk: rpcTraces.some((r) => r.jsonRpcMethod === 'server/discover' && rpcSucceeded(r) && r.discoverValidated),
       toolsListCount: toolsList.length,
       toolsListOk: toolsList.some((r) => rpcSucceeded(r) && r.schemaValidated),
       doctorOk,
     })
-    return { generatedAt: Date.now(), windowStartedAt: windowStart, checks, conclusion, stats: computeMethodStats(recent), ...protocol, traces: recent }
+    return { generatedAt: Date.now(), windowStartedAt: windowStart, checks, conclusion, stats: computeMethodStats(rpcTraces), ...protocol, traces: recent }
   }
 
   // ===== 内部 =====

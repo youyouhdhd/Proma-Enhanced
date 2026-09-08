@@ -7,7 +7,7 @@ import { formatProtocolExport } from '../../../../renderer/components/settings/m
 
 describe('V8 诊断证据与安全边界', () => {
   it('Given HTTP 200 RPC error When tools/list 分析 Then 不显示绿色', () => {
-    const trace: PromaMcpRequestTrace = { at: 1, method: 'POST', path: '/mcp', hasSessionId: false, statusCode: 200, completed: true, jsonRpcMethod: 'tools/list', rpcErrorCode: -32601 }
+    const trace: PromaMcpRequestTrace = { requestKind: 'mcp-rpc', requestSource: 'connector-forwarded', at: 1, method: 'POST', path: '/mcp', hasSessionId: false, statusCode: 200, completed: true, jsonRpcMethod: 'tools/list', rpcErrorCode: -32601 }
     expect(analyzeProtocol([trace], true).toolDiscovery?.ok).toBe(false)
     expect(analyzeProtocol([trace], true).connectorReady).toBe(false)
     expect(computeMethodStats([{ ...trace, jsonRpcMethod: '__proto__' }]).methods.__proto__).toBe(1)
@@ -28,7 +28,7 @@ describe('V8 诊断证据与安全边界', () => {
   it('Given 多余敏感状态字段 When 导出 Then 只包含允许字段', () => {
     const injected = {
       appVersion: '1.7.0', authorization: 'secret-auth',
-      recentRequests: [{ at: 1, method: 'POST', path: '/mcp', hasSessionId: false, statusCode: 406,
+      recentRequests: [{ requestKind: 'mcp-rpc', requestSource: 'connector-forwarded', at: 1, method: 'POST', path: '/mcp', hasSessionId: false, statusCode: 406,
         arguments: { content: 'secret-content' }, requestMetadata: { accept: 'image/png', authorization: 'secret-header' } }],
     }
     const text = formatProtocolExport(injected as unknown as Parameters<typeof formatProtocolExport>[0], null, null)

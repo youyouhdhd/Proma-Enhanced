@@ -1921,10 +1921,16 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle(MCP_TUNNEL_IPC_CHANNELS.OPEN_LOGS, async (): Promise<void> => {
+    const { getTunnelLogUrl } = await import('./lib/mcp-server/tunnel-log-url')
+    await shell.openExternal(getTunnelLogUrl(mcpTunnelService.getState().healthUrl))
+  })
+
   // ChatGPT Connector 创建失败端到端诊断（V5 §13）
   ipcMain.handle(
     MCP_TUNNEL_IPC_CHANNELS.DIAGNOSE_CONNECTOR,
     async (_, windowStartedAt?: number): Promise<import('@proma/shared').PromaMcpConnectorDiagnosis> => {
+      if (windowStartedAt !== undefined && (!Number.isFinite(windowStartedAt) || windowStartedAt < 0)) throw new Error('无效的协议调试时间')
       return mcpTunnelService.diagnoseConnector(windowStartedAt)
     }
   )

@@ -39,6 +39,12 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run --filter='@proma/electron' check:renderer-boundaries
+      - run: bun run --filter='@proma/electron' test:mcp-wire
+      - run: bun run --filter='@proma/electron' test:mcp-official-client
+      - run: bun run electron:build
+      - run: bun run --filter='@proma/electron' smoke:renderer-dist
+      - name: Electron Node 下的 MCP CJS 冒烟
+        run: bun run --filter='@proma/electron' smoke:mcp-bundle (Resolve-Path 'node_modules/electron/dist/electron.exe').Path
 
   build-mac-arm64:
     needs: verify-mcp

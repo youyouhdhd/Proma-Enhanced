@@ -234,7 +234,19 @@ export interface PromaMcpTunnelDoctorResult {
 }
 
 /** 单条 MCP 请求观测记录（V5 §10；不含任何敏感头 / 参数） */
+export type PromaMcpRequestKind = 'mcp-rpc' | 'oauth-probe' | 'oauth-well-known' | 'legacy-session-stream' | 'health' | 'unknown-http'
+export type PromaMcpRequestSource = 'connector-forwarded' | 'tunnel-client-internal' | 'local-mcp-client' | 'unknown'
+
+export interface PromaMcpSourceSignals {
+  hasOpenAiSubject: boolean
+  hasOpenAiSession: boolean
+  tunnelClientUserAgent: boolean
+}
+
 export interface PromaMcpRequestTrace {
+  requestKind: PromaMcpRequestKind
+  requestSource: PromaMcpRequestSource
+  sourceSignals?: PromaMcpSourceSignals
   completed?: boolean
   protocolEra?: 'modern' | 'legacy'
   sessionEvent?: 'created' | 'used' | 'closed'
@@ -302,6 +314,15 @@ export interface ToolDiscoveryState {
 }
 
 export interface PromaMcpConnectorDiagnosis {
+  traffic?: {
+    totalHttpCount: number
+    connectorRpcCount: number
+    unattributedRpcCount: number
+    localRpcCount: number
+    internalProbeCount: number
+    oauthProbeCount: number
+    oauthWellKnownCount: number
+  }
   protocolNegotiation?: PromaMcpProtocolNegotiation
   transport?: { http406Count: number; rejectedRequests: PromaMcpRequestTrace[] }
   toolDiscovery?: ToolDiscoveryState
@@ -313,7 +334,7 @@ export interface PromaMcpConnectorDiagnosis {
   windowStartedAt: number
   checks: Array<{ name: string; state: PromaMcpDiagnosticState; message?: string }>
   /** CASE A：请求未到达；CASE B-AUTH：被本机认证拒绝；CASE B-DISCOVER：server/discover 失败；CASE B-HANDSHAKE：discovery 前置完成但未进 tools/list；CASE B-PROTOCOL：tools/list 失败；CASE C：tools/list 200 */
-  conclusion?: { id: 'A' | 'B-AUTH' | 'B-DISCOVER' | 'B-HANDSHAKE' | 'B-ERA-FALLBACK' | 'B-TRANSPORT' | 'B-PROTOCOL' | 'C' | 'OK'; title: string; detail: string; action?: string }
+  conclusion?: { id: 'A' | 'A-UPSTREAM' | 'B-AUTH' | 'B-DISCOVER' | 'B-HANDSHAKE' | 'B-ERA-FALLBACK' | 'B-TRANSPORT' | 'B-PROTOCOL' | 'C' | 'OK'; title: string; detail: string; action?: string }
   /** 请求方法直方图（V7 §6） */
   stats: PromaMcpMethodStats
 }
@@ -324,6 +345,7 @@ export const MCP_TUNNEL_IPC_CHANNELS = {
   START: 'mcp-tunnel:start',
   STOP: 'mcp-tunnel:stop',
   DIAGNOSE_CONNECTOR: 'mcp-tunnel:diagnose-connector',
+  OPEN_LOGS: 'mcp-tunnel:open-logs',
   SAVE_CONFIG: 'mcp-tunnel:save-config',
   SAVE_RUNTIME_KEY: 'mcp-tunnel:save-runtime-key',
   CLEAR_RUNTIME_KEY: 'mcp-tunnel:clear-runtime-key',

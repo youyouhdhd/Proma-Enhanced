@@ -264,6 +264,13 @@ export function McpServerSettings(): React.ReactElement {
     finally { setDiagnosing(false) }
   }
 
+  const runDoctor = async (): Promise<void> => {
+    setDiagnosing(true)
+    try { setDoctor(await window.electronAPI.runMcpTunnelDoctor()) }
+    catch { setProtocolMessage('Doctor 未完成；协议调试期间请只分析已采集记录。') }
+    finally { setDiagnosing(false) }
+  }
+
   /** V6 §28：Connector 测试窗口——只统计该时间之后的请求，避免历史干扰 */
   const startDiagnosisWindow = async (): Promise<void> => {
     try {
@@ -271,7 +278,7 @@ export function McpServerSettings(): React.ReactElement {
       setStatus(next)
       setDiagnosisWindowStart(next.protocolDebug?.startedAt ?? Date.now())
       setDiagnosis(null)
-      setProtocolMessage('请在 ChatGPT 创建 Connector；两分钟后自动停止采集安全请求头。')
+      setProtocolMessage('请只在 ChatGPT 点击 Create 一次；本窗口暂停 Doctor，两分钟后自动停止采集并分析记录。')
     } catch { setProtocolMessage('无法启动调试，请完全退出并重启 PROMA。') }
   }
 
@@ -287,8 +294,11 @@ export function McpServerSettings(): React.ReactElement {
         if (next.protocolDebug?.active) timer = setTimeout(() => { void poll() }, 1000)
         else {
           setProtocolMessage('两分钟 Protocol Debug 已结束，正在分析本次请求。')
-          const result = await window.electronAPI.diagnoseMcpConnector(diagnosisWindowStart)
-          if (!disposed) { setDiagnosis(result); setProtocolMessage('Protocol Debug 已结束，可复制本次协议诊断。') }
+          setDiagnosing(true)
+          try {
+            const result = await window.electronAPI.diagnoseMcpConnector(diagnosisWindowStart)
+            if (!disposed) { setDiagnosis(result); setProtocolMessage('Protocol Debug 已结束，可复制本次协议诊断。') }
+          } finally { setDiagnosing(false) }
         }
       } catch { if (!disposed) setProtocolMessage('调试状态读取失败，请检查后台连接。') }
     }
@@ -299,10 +309,11 @@ export function McpServerSettings(): React.ReactElement {
   const phase = tunnelPhaseLabel(tunnel)
   const clientInfo = tunnel?.client
   const lastTool = status?.lastToolCall
+  const liveTraces = status?.recentRequests ?? []
 
   const negotiation = diagnosis?.protocolNegotiation
   const discoveryPipeline = diagnosis ? [
-    { label: '① Tunnel Request', ok: (diagnosis.stats?.total ?? 0) > 0, detail: (diagnosis.stats?.total ?? 0) + ' 条请求到达 PROMA' },
+    { label: '① ChatGPT Connector RPC', ok: (diagnosis.traffic?.connectorRpcCount ?? 0) > 0, detail: (diagnosis.traffic?.connectorRpcCount ?? 0) + ' 条带转发标记；' + (diagnosis.traffic?.unattributedRpcCount ?? 0) + ' 条来源未确认' },
     { label: '② Server Discovery', ok: negotiation?.discoverRpcOk, detail: negotiation?.discoverHttpOk ? 'HTTP 已响应；' + (negotiation.discoverRpcOk ? '官方 schema 验证通过' : 'RPC 未确认') : '尚未成功响应' },
     { label: '③ Protocol Negotiation', ok: negotiation?.era === 'modern', detail: negotiation?.fallbackDetected ? '⚠ Modern → Legacy fallback' : negotiation?.era ?? 'unknown' },
     { label: '④ Transport', ok: (diagnosis.stats?.total ?? 0) > 0 && diagnosis.transport?.rejectedRequests.length === 0, detail: 'POST 406 × ' + (diagnosis.transport?.http406Count ?? 0) },
@@ -446,14 +457,19 @@ export function McpServerSettings(): React.ReactElement {
                 <div>地址：<span className="font-mono text-foreground">{status.endpoint}</span></div>
                 <div className="text-emerald-600/90">这个地址不需要复制。PROMA 会自动把它交给 OpenAI Tunnel Client。</div>
                 <div>已开放：{status.workspaces.filter((w) => w.enabled).length} 个项目 · {tools.filter((t) => t.enabled).length} 个工具 · 活跃会话 {status.activeSessions}</div>
-                {lastTool && <div className="text-emerald-600">✓ 已收到来自 ChatGPT 的 MCP 请求 · 最近工具：{lastTool.name} · {new Date(lastTool.at).toLocaleTimeString()}</div>}
+                {lastTool && <div>最近 MCP 工具调用：{lastTool.name} · {new Date(lastTool.at).toLocaleTimeString()}（来源见请求记录）</div>}
+                <div className="text-muted-foreground">
+                  Connector RPC（带转发标记）：{liveTraces.filter((t) => t.requestKind === 'mcp-rpc' && t.requestSource === 'connector-forwarded').length} ·
+                  内部探测：{liveTraces.filter((t) => t.requestSource === 'tunnel-client-internal' && ['oauth-probe', 'oauth-well-known'].includes(t.requestKind)).length} ·
+                  本地 RPC：{liveTraces.filter((t) => t.requestKind === 'mcp-rpc' && t.requestSource === 'local-mcp-client').length}
+                </div>
                 {(status.recentRequests ?? []).length > 0 && (
                   <div className="pt-1">
                     <div className="text-muted-foreground">最近 MCP 请求</div>
                     <div className="mt-0.5 max-h-24 overflow-auto font-mono text-[10px]">
                       {(status.recentRequests ?? []).slice(-50).reverse().map((trace, index) => (
                         <div key={trace.at + '-' + index} className={
-                          trace.statusCode === 401 || trace.statusCode === 403 || trace.statusCode >= 500
+                          trace.requestKind !== 'mcp-rpc' ? 'text-muted-foreground' : trace.rpcErrorCode !== undefined || trace.statusCode === 401 || trace.statusCode === 403 || trace.statusCode >= 500
                             ? 'text-destructive'
                             : trace.statusCode >= 400
                               ? 'text-amber-600 dark:text-amber-400'
@@ -723,13 +739,18 @@ export function McpServerSettings(): React.ReactElement {
                     <Square size={13} /> 停止
                   </Button>
                 )}
-                <Button size="sm" variant="ghost" type="button" className="h-7" onClick={() => { void window.electronAPI.runMcpTunnelDoctor().then((r) => setDoctor(r)) }}>
+                <Button size="sm" variant="ghost" type="button" className="h-7" disabled={diagnosing || status?.protocolDebug?.active} onClick={() => { void runDoctor() }}>
                   <Stethoscope size={13} /> 运行诊断
                 </Button>
-                <Button size="sm" variant="ghost" type="button" className="h-7" disabled={diagnosing} onClick={() => { void runConnectorDiagnosis() }}>
-                  {diagnosing ? '诊断中…' : '连接失败？运行完整诊断'}
+                <Button size="sm" variant="ghost" type="button" className="h-7" disabled={diagnosing || status?.protocolDebug?.active} onClick={() => { void runConnectorDiagnosis() }}>
+                  {diagnosing ? '诊断中…' : diagnosisWindowStart ? '分析本次协议记录' : '连接失败？运行完整诊断'}
                 </Button>
-                <Button size="sm" variant="ghost" type="button" className="h-7" disabled={status?.protocolDebug?.active} onClick={() => { void startDiagnosisWindow() }}>
+                <Button size="sm" variant="outline" type="button" disabled={!tunnel?.healthUrl} onClick={() => {
+                  void window.electronAPI.openMcpTunnelLogs()
+                    .then(() => setProtocolMessage('已打开 Tunnel Client Logs，请核对 Create 时的 command 与 localhost dispatch。'))
+                    .catch(() => setProtocolMessage('无法打开日志，请确认 Tunnel 正在运行并提供本地管理地址。'))
+                }}>打开 Tunnel Client Logs</Button>
+                <Button size="sm" variant="ghost" type="button" className="h-7" disabled={diagnosing || status?.protocolDebug?.active} onClick={() => { void startDiagnosisWindow() }}>
                   开始 2 分钟 Protocol Debug
                 </Button>
               </div>
@@ -743,6 +764,7 @@ export function McpServerSettings(): React.ReactElement {
               }}>复制协议诊断</Button>
             </div>
             {protocolMessage && <p role="status" className="text-xs text-muted-foreground">{protocolMessage}</p>}
+            <p className="text-xs text-muted-foreground">来源按转发标记和请求形状判断，不代表身份认证。没有 Connector RPC 时，请先查看 Tunnel Logs；探测响应不会判为 Connector 协议失败。</p>
             {tunnel?.error && (
               <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive space-y-1">
                 <div>{tunnel.error.title}</div>
@@ -796,6 +818,11 @@ export function McpServerSettings(): React.ReactElement {
                     {check.message && <span className="text-muted-foreground/80">{check.message}</span>}
                   </div>
                 ))}
+                <div className="text-muted-foreground">
+                  Tunnel Client 内部探测 {diagnosis.traffic?.internalProbeCount ?? 0} 条（不计 Connector RPC） ·
+                  OAuth Probe {diagnosis.traffic?.oauthProbeCount ?? 0} · Well-known {diagnosis.traffic?.oauthWellKnownCount ?? 0} ·
+                  本地 RPC {diagnosis.traffic?.localRpcCount ?? 0}
+                </div>
                 <div className="grid grid-cols-2 gap-2 border-t border-border/60 pt-1.5">
                   <div>
                     <div className="text-muted-foreground">RPC Method</div>

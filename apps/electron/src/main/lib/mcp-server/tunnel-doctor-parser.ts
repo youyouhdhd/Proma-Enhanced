@@ -133,7 +133,7 @@ export function computeBlockingFailures(parsed: ParsedDoctorCheck[], knownFailur
 
 /** Connector 结论归类（V6 §20；纯函数便于回归测试） */
 export interface ConnectorConclusionInput {
-  protocol?: Pick<PromaMcpConnectorDiagnosis, 'protocolNegotiation' | 'transport' | 'toolDiscovery' | 'connectorReady'>
+  protocol?: Pick<PromaMcpConnectorDiagnosis, 'protocolNegotiation' | 'transport' | 'toolDiscovery' | 'connectorReady' | 'traffic' | 'toolCallOk'>
   recentCount: number
   allRejected: boolean
   /** server/discover 请求条数（V7 §8） */
@@ -148,6 +148,11 @@ export interface ConnectorConclusionInput {
 export function classifyConnectorConclusion(
   input: ConnectorConclusionInput,
 ): PromaMcpConnectorDiagnosis['conclusion'] {
+  if (input.protocol?.traffic && input.recentCount === 0) {
+    return { id: 'A-UPSTREAM', title: 'CASE A-UPSTREAM：未观察到 ChatGPT Connector MCP RPC',
+      detail: '本窗口尚无 Connector RPC 证据。内部探测、本地客户端或其他 HTTP 流量不能证明 ChatGPT 已下发命令，也不能据此判断 MCP 协议失败。',
+      action: '打开 Tunnel Client Logs，核对 ChatGPT Create 时是否出现 command 和 localhost dispatch；先定位交付链路，不继续修改 MCP Server' }
+  }
   if (input.recentCount === 0) {
     return {
       id: 'A',
@@ -159,8 +164,8 @@ export function classifyConnectorConclusion(
   if (input.allRejected) {
     return {
       id: 'B-AUTH',
-      title: 'CASE B-AUTH：ChatGPT 请求已到达 PROMA，但被本地 MCP 认证拒绝',
-      detail: 'Tunnel 链路是通的。可能原因：① PROMA MCP 开启了 Bearer Authentication；② Tunnel Client 没有注入 Authorization Header；③ Local MCP 认证配置修改后未重启。',
+      title: 'CASE B-AUTH：MCP RPC 被本地认证拒绝',
+      detail: 'RPC 已到达 PROMA，来源以转发标记为准。请检查本机 Bearer 配置、Tunnel Client 的凭据注入及配置修改后的重启状态。',
       action: '点击「检查配置并连接」让 PROMA 重新以正确凭据启动 Tunnel Client',
     }
   }
@@ -168,8 +173,8 @@ export function classifyConnectorConclusion(
   if (input.discoverCount > 0 && !input.discoverOk) {
     return {
       id: 'B-DISCOVER',
-      title: 'CASE B-DISCOVER：ChatGPT 已开始 MCP Discovery，但 server/discover 响应失败',
-      detail: 'Tunnel 链路正常，问题位于 PROMA MCP Discovery 协议层（详见请求时间线中的 RPC 错误码）。',
+      title: 'CASE B-DISCOVER：server/discover RPC 响应失败',
+      detail: 'Discovery RPC 已到达 PROMA，请结合来源分类、HTTP 状态及 RPC 错误码定位失败。',
       action: '更新 PROMA MCP Discovery compatibility 后重试',
     }
   }
@@ -204,17 +209,17 @@ export function classifyConnectorConclusion(
       action: '复制协议诊断以检查 RPC 错误和工具 schema',
     }
   }
-  if (!input.doctorOk || (input.protocol && !input.protocol.connectorReady)) {
+  if (input.protocol ? !input.protocol.connectorReady || !input.protocol.toolCallOk : !input.doctorOk) {
     return {
       id: 'C',
       title: 'CASE C：工具发现成功，Connector 就绪尚未确认',
       detail: '请检查协议时代和 Tunnel readiness。服务端工具列表成功不代表 ChatGPT 已创建 App。',
-      action: '按 Doctor 失败项提示处理',
+      action: '核对 Tunnel readiness 与转发来源；在 ChatGPT 确认 App 创建后执行 workspace_list',
     }
   }
   return {
     id: 'OK',
     title: '链路各层正常',
-    detail: '本地 MCP、Tunnel Client、Runtime Key、tools/list 均验证通过。若 ChatGPT 仍创建失败，请检查协议版本与 ChatGPT 侧约束，稍后重试。',
+    detail: '已观察到带转发标记的现代 Discovery、有效工具列表和成功工具调用，Tunnel readiness 正常。App 是否已保存仍以 ChatGPT 界面为准。',
   }
 }

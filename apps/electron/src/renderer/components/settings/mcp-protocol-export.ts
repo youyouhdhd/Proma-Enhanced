@@ -5,6 +5,8 @@ export function formatProtocolTrace(t: PromaMcpRequestTrace): string {
   const h = t.requestMetadata
   return [
     new Date(t.at).toISOString() + ' ' + t.method + ' ' + t.path,
+    'Kind: ' + (t.requestKind ?? 'unknown-http') + ' · Source: ' + (t.requestSource ?? 'unknown'),
+    'Source signals (presence only): subject=' + Boolean(t.sourceSignals?.hasOpenAiSubject) + ' · session=' + Boolean(t.sourceSignals?.hasOpenAiSession) + ' · tunnel-UA=' + Boolean(t.sourceSignals?.tunnelClientUserAgent),
     'RPC: ' + (t.jsonRpcMethod ?? 'unknown') + ' · HTTP ' + t.statusCode + ' · session=' + t.hasSessionId + ' · transition=' + (t.sessionEvent ?? '-'),
     'Accept: ' + (h?.accept ?? '未采集') + ' · Content-Type: ' + (h?.contentType ?? '未采集'),
     'MCP Protocol: ' + (h?.protocolVersionHeader ?? t.protocolVersion ?? 'unknown'),
@@ -23,6 +25,9 @@ export function formatProtocolExport(status: PromaMcpServerStatus | null, tunnel
     'readyz: ' + (diagnosis?.checks.find((c) => c.name === 'Secure Tunnel /readyz')?.state ?? '未检查'),
     'Protocol Era: ' + (diagnosis?.protocolNegotiation?.era ?? 'unknown'),
     'Fallback: ' + (diagnosis?.protocolNegotiation?.fallbackDetected ?? false),
+    'Connector RPC: ' + (diagnosis?.traffic?.connectorRpcCount ?? '未分析') + ' · Unattributed RPC: ' + (diagnosis?.traffic?.unattributedRpcCount ?? '未分析'),
+    'Internal probes: ' + (diagnosis?.traffic?.internalProbeCount ?? '未分析') + ' · OAuth probes: ' + (diagnosis?.traffic?.oauthProbeCount ?? '未分析') + ' · Well-known: ' + (diagnosis?.traffic?.oauthWellKnownCount ?? '未分析'),
+    'Local MCP RPC: ' + (diagnosis?.traffic?.localRpcCount ?? '未分析'),
     'Method histogram: ' + JSON.stringify(diagnosis?.stats?.methods ?? {}),
     'HTTP histogram: ' + JSON.stringify(diagnosis?.stats?.statuses ?? {}),
     ...traces.map(formatProtocolTrace),
