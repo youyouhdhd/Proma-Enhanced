@@ -1,6 +1,6 @@
 {
   "name": "@proma/electron",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Proma，为专业用户设计的 Agent",
   "main": "dist/main.cjs",
   "author": {
@@ -31,6 +31,7 @@
     "build:native-helpers": "bun run build:agent-island-native && bun run build:eventkit-native",
     "build:cli": "bun run scripts/build-cli.ts",
     "prepare:officecli": "bun run scripts/prepare-officecli.ts",
+    "prepare:electron": "bunx --no-install install-electron",
     "sync:runtime-deps": "bun run scripts/sync-runtime-deps.ts",
     "sync:runtime-deps:dev": "bun run scripts/sync-runtime-deps.ts --no-clean",
     "build": "bun run prepare:officecli && bun run build:main && bun run build:agent-runtime && bun run build:terminal-runtime && bun run build:preload && bun run build:renderer && bun run build:cli && bun run build:native-helpers && bun run build:resources",

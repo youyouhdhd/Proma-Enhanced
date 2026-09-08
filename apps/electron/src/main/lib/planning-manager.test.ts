@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -20,6 +20,7 @@ const electronBinary = join(dirname(electronModulePath), 'dist', electronBinaryN
  * 因此用 Bun 打包 TypeScript 验证脚本，再用独立 Electron Node 进程执行真实 SQLite 回归。
  */
 test('Given a fresh planning database When planning data changes Then isolation, transactions, reminders and optimistic versions stay correct', async () => {
+  expect(existsSync(electronBinary), '缺少 Electron 二进制，请先运行 bun run --filter=\'@proma/electron\' prepare:electron').toBe(true)
   const home = mkdtempSync(join(tmpdir(), 'proma-planning-'))
   const sourcePath = join(home, 'verify-planning-manager.ts')
   const outputPath = join(home, 'verify-planning-manager.mjs')
@@ -127,7 +128,9 @@ test('Given a fresh planning database When planning data changes Then isolation,
         PROMA_DEV: '1',
       },
       encoding: 'utf8',
+      windowsHide: true,
     })
+    expect(result.error, result.error?.message).toBeUndefined()
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
   } finally {
     rmSync(home, { recursive: true, force: true })

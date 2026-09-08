@@ -34,11 +34,11 @@
 
 ## 实现与验证记录
 
-- 应用版本 1.7.0，共享契约包 0.2.1，preload bridge 8。
+- 应用版本 1.7.1（1.7.0 的 CI 前置条件补丁），共享契约包 0.2.1，preload bridge 8。
 - 本地 633 项测试通过；官方 Client 的 auto/pin 模式均返回 modern，无 initialize 回退；workspace_list、git_status、read_file 实际执行成功。
 - 两级测试命令：`bun run --filter='@proma/electron' test:mcp-wire`、`bun run --filter='@proma/electron' test:mcp-official-client`。
 - 已运行 endpoint：`bun run --filter='@proma/electron' test:mcp-live <endpoint>`。raw HTTP 脚本仍是 `test:mcp-modern`；认证只通过 PROMA_MCP_AUTH_HEADER 环境变量传入，禁止把密钥写在参数中。
-- 构建顺序：`bun install --frozen-lockfile` → `bun run typecheck` → `bun test` → `bun run electron:build` → renderer 边界/产物扫描 → `bun run dist:win`。
+- 构建顺序：`bun install --frozen-lockfile` → `bun run --filter='@proma/electron' prepare:electron` → `bun run typecheck` → `bun test` → `bun run electron:build` → renderer 边界/产物扫描 → `bun run dist:win`。
 - 若只是同步运行时依赖之后又改了源码，可重新 build 后用 `bunx electron-builder --win --x64 --publish never` 更新安装包；运行时依赖变化则必须重新同步。
 - 本地 Windows NSIS 打包完成。同步运行时依赖可能需要数分钟；不能把无新日志误判为完成。
 - `bun run --filter='@proma/electron' smoke:mcp-bundle` 将同一 MCP 实现打为 CJS，并用 out/win-unpacked/Proma.exe 的 Electron Node 模式运行隔离临时仓库测试；实际 Node=24.18.0，Electron=43.2.0，通过。它不验证 GUI。
@@ -53,4 +53,14 @@
 
 本次以预发布交付；源码提交、构建和自动验证完成不等于 V8 Definition of Done 全部通过。真实 ChatGPT 浏览器控制发生导航超时，未取得 App 创建成功证据；也未覆盖安装并操作正式设置页。用户应完成本文档和 Release 所列测试后，再将同一版本转为正式发布、删除历史 shim。现有 Tunnel runner、密钥存储、OAuth 主动打开浏览器流程没有重写。
 
-Release 工作流新增 verify-mcp 门禁（类型检查、全量测试、renderer 源码扫描），各平台构建成功后检查资产；发布说明从 release-notes/v1.7.0.md 提交与维护，不再仅用一行 Git 提交信息。
+Release 工作流新增 verify-mcp 门禁（类型检查、全量测试、renderer 源码扫描），各平台构建成功后检查资产；发布说明从 release-notes/v1.7.1.md 提交与维护，不再仅用一行 Git 提交信息。
+
+## Actions 故障与稳定修复（1.7.1）
+
+- [1.7.0 首轮 Actions](https://github.com/youyouhdhd/Proma-Enhanced/actions/runs/34201342714)：632 pass / 1 fail；失败为既有 planning-manager.test.ts，所有 V8 MCP 测试通过。构建被验证门禁阻止，未发布 1.7.0 安装包。
+- 日志表现：spawnSync 的 stdout/stderr 为 null、退出码缺失。测试绕过 Electron CLI，直接启动 node_modules/electron/dist/electron.exe；干净 runner 上只有 JS 包，尚无二进制。本地已下载过，所以未暴露。
+- 官方从 Electron 42 起移除下载二进制的 postinstall，改为 CLI 首次运行动态下载；本仓库 Electron 43.2.0 的 package.json 同样没有 postinstall。依据：[官方变更说明](https://www.electronjs.org/docs/latest/breaking-changes/)、[官方安装指南](https://github.com/electron/electron/blob/main/docs/tutorial/installation.md)。
+- 修复：提供 prepare:electron（bunx --no-install install-electron），在 CI 全量测试前显式执行锁定依赖的官方安装器。已有二进制时直接复用，下载失败就停止；不依赖本地缓存，不关闭门禁或跳过 Planning 测试。
+- 测试增加二进制存在检查、spawn error 断言及 windowsHide，今后缺环境会输出可执行的修复命令。
+- 保留失败标签 v1.7.0 作为审计记录，不移动已推送标签；新补丁提交与发布使用 v1.7.1。gh 默认可能选择官方上游，所有发布操作必须显式加 `-R youyouhdhd/Proma-Enhanced`。
+- 本地 1.7.1 构建与 typecheck 并行时，esbuild 曾出现一次原生进程 `0xc0000005` fault；类型检查结束后串行重跑同一构建成功。该次崩溃未定位到源码错误，不能宣称永久消除；保留原始日志并优先串行执行构建验证，重复出现时再调查 esbuild/系统环境，不靠无限重试掩盖失败。

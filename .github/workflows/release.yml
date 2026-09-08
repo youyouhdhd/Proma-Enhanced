@@ -34,6 +34,8 @@ jobs:
         with:
           node-version: 22
       - run: bun install --frozen-lockfile
+      # Electron 42+ 不再在 postinstall 下载二进制；Planning 回归直接启动 Electron Node。
+      - run: bun run --filter='@proma/electron' prepare:electron
       - run: bun run typecheck
       - run: bun test
       - run: bun run --filter='@proma/electron' check:renderer-boundaries
