@@ -259,6 +259,8 @@ type AgentRunInput = AgentSendInput & { runGeneration?: number }
 
 export interface AgentRunExtensions {
   piCustomTools?: ToolDefinition[]
+  /** 仅受信 Main 调用可设置；独占只读工具，不能通过 IPC input 伪造。 */
+  analysisTools?: ToolDefinition[]
 }
 
 /**
@@ -393,7 +395,7 @@ export async function runAgentHeadless(
   input: AgentSendInput,
   callbacks: {
     onError: (error: string) => void
-    onComplete: (messages?: AgentMessage[]) => void
+    onComplete: (messages?: AgentMessage[], outcome?: { stoppedByUser?: boolean }) => void
     onTitleUpdated: (title: string) => void
     source?: AgentExternalRunSource
     originSessionId?: string
@@ -436,7 +438,7 @@ export async function runAgentHeadless(
         }
       },
       onComplete: (messages, opts) => {
-        callbacks.onComplete(messages)
+        callbacks.onComplete(messages, { stoppedByUser: opts?.stoppedByUser })
         publishRunStopped(runInput.sessionId, opts?.stoppedByUser, opts?.startedAt, opts?.runGeneration)
         eventBus.emit(runInput.sessionId, {
           kind: 'proma_event',
@@ -506,7 +508,7 @@ export async function runAgentHeadless(
       },
     }, extensions)
   } catch (err) {
-    console.error('[Agent 服务] runAgentHeadless 未处理异常:', err)
+    console.error('[Agent 服务] runAgentHeadless 未处理异常:', extensions?.analysisTools ? '远程分析失败' : err)
     const errorMessage = err instanceof Error ? err.message : '未知错误'
     callbacks.onError(errorMessage)
     callbacks.onComplete()

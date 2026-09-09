@@ -13,10 +13,11 @@ import { TransportSecretStore } from './secret-store'
 import { TunnelProcessRunner } from '../mcp-server/tunnel-process-runner'
 
 const secret = 'a'.repeat(43)
-function fixture(kind: 'cloudflare-quick' | 'cloudflare-named', token?: string, options: { exit?: boolean; noUrl?: boolean; version?: () => Promise<string>; probeFail?: boolean } = {}) {
+async function fixture(kind: 'cloudflare-quick' | 'cloudflare-named', token?: string, options: { exit?: boolean; noUrl?: boolean; version?: () => Promise<string>; probeFail?: boolean } = {}) {
   const config = normalizeRemoteConfig({ mode: kind, cloudflare: { hostname: 'https://public.example.com' } })
   config.publicIngress.port = 0
   const ingress = new PublicMcpIngress({ list: () => [], call: async () => ({ content: [] }) }, () => secret, 'marker')
+  await ingress.start(0)
   const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, kill: () => true }) as unknown as ChildProcess
   child.kill = () => { child.emit('exit', 0); return true }
   const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv | undefined }> = []
@@ -28,12 +29,12 @@ function fixture(kind: 'cloudflare-quick' | 'cloudflare-named', token?: string, 
     }); return child },
     probe: async () => { if (options.probeFail) throw new Error('PUBLIC_MCP_TOOL_DISCOVERY_FAILED'); return { modern: true, toolCount: 10, workspaceList: true } },
   })
-  return { provider, child, calls }
+  return { provider, child, calls, ingress }
 }
 
 describe('V10 Transport', () => {
   it('Given Quick CLI output When URL arrives Then 官方探测通过才 Ready，状态不含 Secret', async () => {
-    const { provider, child } = fixture('cloudflare-quick')
+    const { provider, child, ingress } = await fixture('cloudflare-quick')
     try {
       const status = await provider.start()
       expect(status.phase).toBe('ready')
@@ -42,10 +43,10 @@ describe('V10 Transport', () => {
       child.emit('exit', 1)
       expect(provider.getStatus().phase).toBe('error')
       expect(provider.getStatus().probe).toBeUndefined()
-    } finally { await provider.stop() }
+    } finally { await provider.stop(); await ingress.stop() }
   })
   it('Given Named When start Then Token 只在 env，域名稳定', async () => {
-    const { provider, calls } = fixture('cloudflare-named', 'never-log-token')
+    const { provider, calls, ingress } = await fixture('cloudflare-named', 'never-log-token')
     try {
       const first = await provider.start()
       expect(first.phase).toBe('ready')
@@ -55,7 +56,7 @@ describe('V10 Transport', () => {
       expect(JSON.stringify(first)).not.toContain('never-log-token')
       await provider.stop()
       expect((await provider.start()).endpoint?.connectorUrl).toBe(first.endpoint?.connectorUrl)
-    } finally { await provider.stop() }
+    } finally { await provider.stop(); await ingress.stop() }
   })
   it('Given 缺程序/缺 Token/无 URL/退出/探测失败 When start Then 错误不标 Ready', async () => {
     for (const [kind, opts, expected] of [
@@ -65,26 +66,27 @@ describe('V10 Transport', () => {
       ['cloudflare-quick', { exit: true }, 'CLOUDFLARED_LAUNCH_FAILED'],
       ['cloudflare-quick', { probeFail: true }, 'PUBLIC_MCP_TOOL_DISCOVERY_FAILED'],
     ] as const) {
-      const { provider } = fixture(kind, undefined, opts)
-      try { const status = await provider.start(); expect(status.phase).toBe('error'); expect(status.errorCode).toBe(expected) }
-      finally { await provider.stop() }
+      const { provider, ingress } = await fixture(kind, undefined, opts)
+      try { const status = await provider.start(); expect(status.phase).toBe('noUrl' in opts || 'probeFail' in opts ? 'degraded' : 'error'); expect(status.errorCode).toBe(expected) }
+      finally { await provider.stop(); await ingress.stop() }
     }
   })
   it('Given start 正在 preflight When stop Then 迟到结果不会复活连接', async () => {
     let finish: (value: string) => void = () => undefined
     const pending = new Promise<string>((resolve) => { finish = resolve })
-    const { provider } = fixture('cloudflare-quick', undefined, { version: () => pending })
+    const { provider, ingress } = await fixture('cloudflare-quick', undefined, { version: () => pending })
     const starting = provider.start()
     await new Promise((resolve) => setTimeout(resolve, 0))
     await provider.stop(); finish('cloudflared version test'); await starting
     expect(provider.getStatus().phase).toBe('stopped')
+    await ingress.stop()
   })
   it('Given 不可信配置 When normalize Then 固定只读、拒绝凭据 URL/无效端口，Proxy 只影响 OpenAI', () => {
     expect(parseQuickUrl('x https://abc-def.trycloudflare.com y')).toBe('https://abc-def.trycloudflare.com')
     expect(parseQuickUrl('https://evil.example.com')).toBeUndefined()
     expect(parseQuickUrl('https://abc.trycloudflare.com.evil.com')).toBeUndefined()
-    expect(normalizeRemoteConfig({}).mode).toBe('local')
-    expect(normalizeRemoteConfig({ publicIngress: { profile: 'full' } }).publicIngress.profile).toBe('public-readonly')
+    expect(normalizeRemoteConfig({}).enabled).toBe(false)
+    expect(normalizeRemoteConfig({ version: 2 }).publicIngress.scopeMode).toBe('inherit')
     expect(() => normalizeRemoteConfig({ publicIngress: { port: 0 } })).toThrow()
     for (const url of ['http://example.com', 'https://user:secret@example.com', 'https://example.com/mcp/key', 'https://example.com?token=x', 'https://192.168.1.1', 'https://[::ffff:127.0.0.1]']) expect(() => publicOrigin(url)).toThrow()
     expect(cloudflareArgs('cloudflare-named', 'http://127.0.0.1:8787')).toEqual(['tunnel', '--no-autoupdate', 'run'])

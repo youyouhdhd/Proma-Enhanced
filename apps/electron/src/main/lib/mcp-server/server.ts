@@ -56,6 +56,7 @@ export class PromaMcpServer {
   get running(): boolean {
     return this.httpServer !== null
   }
+  applyToolConfig(config: PromaMcpServerConfig): void { this.config = normalizePromaMcpServerConfig(config) }
 
   async start(input: StartInput): Promise<PromaMcpServerStatus> {
     await this.stop()

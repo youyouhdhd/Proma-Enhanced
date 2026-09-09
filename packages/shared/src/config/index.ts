@@ -4,3 +4,5 @@
 
 // Placeholder - will be expanded as needed
 export const APP_NAME = 'Proma'
+
+export * from './mcp-providers'

@@ -303,7 +303,7 @@ export class PiUtilityAdapter {
   }
 }
 
-function serializeQueryInput(input: PiAgentQueryOptions): Record<string, unknown> {
+export function serializeQueryInput(input: PiAgentQueryOptions): Record<string, unknown> {
   const {
     abortSignal: _abortSignal,
     canUseTool: _canUseTool,

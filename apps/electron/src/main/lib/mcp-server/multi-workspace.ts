@@ -10,7 +10,7 @@
  */
 
 import { existsSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { runReadOnlyGit } from '../local-tools/git-tools'
 import type { PromaMcpWorkspacePermissions } from '@proma/shared'
 import { toolOk, toolError } from '../local-tools/types'
 import type { LocalToolContext, LocalToolDefinition, LocalToolResult } from '../local-tools/types'
@@ -135,7 +135,7 @@ export async function handleWorkspaceList(entries: WorkspaceDirectoryEntry[]): P
     const isGit = existsSync(entry.rootPath + '/.git') || existsSync(entry.rootPath + '\.git')
     let branch: string | undefined
     if (isGit) {
-      const res = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: entry.rootPath, encoding: 'utf8', timeout: 10_000, windowsHide: true })
+      const res = runReadOnlyGit(entry.rootPath, ['symbolic-ref', '--short', 'HEAD'])
       if (res.status === 0) branch = res.stdout.trim() || undefined
     }
     return {

@@ -8,7 +8,7 @@ Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 > - **自建渠道推理档位**：OpenAI 兼容自建渠道可声明推理档位并映射为 `reasoning_effort`，Chat / Agent 工具栏直接切换（上游仅对内置模型提供思考深度）；
 > - **飞书卡片显示渠道名**：同一模型存在多渠道时，卡片底部可分辨实际使用的渠道；
 > - **渲染修复**：未标注语言的代码块不再把路径清单误判为编程语言；
-> - **Public HTTPS 远程 MCP**：支持 Cloudflare Quick / Named，单独授权公网只读项目，通过主进程复制 Secret URL；OpenAI Secure Tunnel 保留为实验性选项，开发与验收记录见 [V10 指南](./docs/mcp-v10-gates.md)；
+> - **MCP 共享与远程访问**：统一管理项目和额外文件夹，动态只读工具、共享热更新，以及可选的异步只读分析；支持多种 HTTPS Provider，各通道验收状态及维护说明见 [V11 指南](./docs/mcp-v11-implementation.md)；
 > - **稳定打包方案**：固定 hoisted 安装布局、Electron 二进制自检的一键构建脚本（`scripts/build-win.ps1`）。
 >
 > 同步策略：定期合并上游（`bun run sync:upstream`），完整差异清单与冲突处理记录见 [docs/fork-maintenance.md](./docs/fork-maintenance.md)。

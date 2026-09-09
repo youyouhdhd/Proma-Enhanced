@@ -19,7 +19,7 @@ import type { LocalToolContext } from '../local-tools'
 import { buildMcpToolViews } from './tool-adapter'
 import { PromaMcpServer } from './server'
 import type { WorkspaceDirectoryEntry } from './multi-workspace'
-import { createConfiguredTools, PUBLIC_READONLY_TOOLS } from './configured-tools'
+import { mcpSharingStore } from '../mcp-sharing/store'
 
 const registry: LocalToolRegistry = createDefaultLocalToolRegistry()
 
@@ -80,166 +80,44 @@ function migrateLocalMcpAuth(current: PromaMcpServerConfig): PromaMcpServerConfi
   return current
 }
 
-/** 从配置条目解析一个可用 Workspace 目录（Agent 工作区存在 + 根目录有效） */
-function resolveWorkspaceEntry(config: PromaMcpServerConfig, entryId: string): WorkspaceDirectoryEntry {
-  const entry = config.workspaces.find((w) => w.id === entryId)
-  if (!entry) throw new Error('MCP Workspace 条目不存在: ' + entryId)
-  if (!entry.enabled) throw new Error('MCP Workspace 未启用: ' + entryId)
-  const workspace = getAgentWorkspace(entry.agentWorkspaceId)
-  const rootPath = workspace?.projectRootPath ?? (workspace?.slug ? getProjectFilesPath(workspace.slug) : '')
-  if (!rootPath || !existsSync(rootPath)) {
-    throw new Error('MCP Workspace 根目录不可用：' + (entry.name ?? entry.agentWorkspaceId))
-  }
-  return {
-    id: entry.id,
-    name: entry.name ?? workspace?.name ?? entry.agentWorkspaceId,
-    rootPath,
-    enabled: true,
-    permissions: entry.permissions,
-  }
-}
-
-/** 列出配置注册的全部 Workspace（含未启用；可用性按当前 Agent 工作区状态判定） */
-function listWorkspaceEntries(config: PromaMcpServerConfig): WorkspaceDirectoryEntry[] {
-  return config.workspaces.map((entry) => {
-    const workspace = getAgentWorkspace(entry.agentWorkspaceId)
-    const rootPath = workspace?.projectRootPath ?? (workspace?.slug ? getProjectFilesPath(workspace.slug) : '')
-    const available = Boolean(rootPath && existsSync(rootPath))
-    return {
-      id: entry.id,
-      name: entry.name ?? workspace?.name ?? entry.agentWorkspaceId,
-      ...(rootPath && available ? { rootPath } : {}),
-      enabled: entry.enabled && available,
-      permissions: entry.permissions,
-    } as WorkspaceDirectoryEntry
-  })
-}
-
-function workspaceContext(entry: WorkspaceDirectoryEntry): { context: LocalToolContext; entry: WorkspaceDirectoryEntry } {
-  return {
-    context: { workspaceId: entry.id, rootPath: entry.rootPath },
-    entry,
-  }
-}
-
 class PromaMcpServerService {
   private readonly server = new PromaMcpServer()
-  hasPublicWorkspace(workspaceIds: string[]): boolean {
-    return listWorkspaceEntries(normalizePromaMcpServerConfig(getSettings().mcpServer)).some((e) => e.enabled && e.permissions.read && workspaceIds.includes(e.id))
+  private appliedLocal = ''
+  private runtimeConfig(): PromaMcpServerConfig {
+    const sharing = mcpSharingStore.get()
+    return { ...normalizePromaMcpServerConfig(getSettings().mcpServer), enabled: sharing.enabled && sharing.localEndpoint.enabled,
+      port: sharing.localEndpoint.port, tools: sharing.tools, auth: { type: sharing.localEndpoint.auth } }
   }
-
-  /** Public scope 与内部启用/read 权限取交集，每次调用重新解析目录。 */
-  publicTools(workspaceIds: string[]) {
-    const config = () => normalizePromaMcpServerConfig(getSettings().mcpServer)
-    return createConfiguredTools({
-      config: () => ({ ...config(), accessMode: 'read-only', tools: { fileRead: true, search: true, git: true, fileWrite: false, shell: false } }),
-      entries: () => listWorkspaceEntries(config()).filter((e) => workspaceIds.includes(e.id) && e.permissions.read)
-        .map((e) => ({ ...e, permissions: { read: true, write: false, shell: false } })),
-      resolve: (id) => {
-        try {
-          const entry = resolveWorkspaceEntry(config(), id)
-          if (!workspaceIds.includes(id) || !entry.permissions.read) return { error: '项目没有公网读取授权' }
-          return workspaceContext({ ...entry, permissions: { read: true, write: false, shell: false } })
-        } catch { return { error: '项目不可用或读取授权已撤销' } }
-      }, registry, allowedNames: PUBLIC_READONLY_TOOLS,
-    })
+  getLocalMcpAuthToken(config = this.runtimeConfig()): string | undefined {
+    return config.auth.type === 'none' ? undefined : readManagedLocalAuthToken()
   }
-
-  /** V6 §12：解析 Local MCP 生效的 Bearer token（managed-bearer → safeStorage；bearer → 配置） */
-  getLocalMcpAuthToken(config?: PromaMcpServerConfig): string | undefined {
-    const effective = config ?? normalizePromaMcpServerConfig(getSettings().mcpServer)
-    if (effective.auth.type === 'managed-bearer') return readManagedLocalAuthToken()
-    if (effective.auth.type === 'bearer') return effective.auth.token
-    return undefined
-  }
-
-  /** 按当前设置启动（设置未启用或未授权任何项目时抛错） */
   async startFromSettings(): Promise<PromaMcpServerStatus> {
-    const settings = getSettings()
-    const config = migrateLocalMcpAuth(normalizePromaMcpServerConfig(settings.mcpServer))
-    // managed-bearer 需要 Secret 就绪（首次启用时生成）
+    migrateLocalMcpAuth(normalizePromaMcpServerConfig(getSettings().mcpServer))
+    const config = this.runtimeConfig()
     if (config.auth.type === 'managed-bearer') ensureManagedLocalAuthToken()
-    if (config.enabled && config.workspaces.filter((w) => w.enabled).length === 0) {
-      throw new Error('MCP Server 尚未授权任何项目，请先在设置中选择要共享的 Workspace。')
-    }
-    return this.server.start({
-      config,
-      listWorkspaces: () => listWorkspaceEntries(config),
-      resolveWorkspaceContext: (entryId) => {
-        try {
-          const entry = resolveWorkspaceEntry(config, entryId)
-          return workspaceContext(entry)
-        } catch (error) {
-          return { error: error instanceof Error ? error.message : String(error) }
-        }
-      },
-      registry,
-      resolveAuthToken: () => this.getLocalMcpAuthToken(config),
-    })
+    this.appliedLocal = JSON.stringify(mcpSharingStore.get().localEndpoint)
+    return this.server.start({ config, listWorkspaces: () => mcpSharingStore.entries(),
+      resolveWorkspaceContext: (id) => {
+        const entry = mcpSharingStore.entries().find((e) => e.id === id && e.enabled)
+        return entry ? { entry, context: { workspaceId: id, rootPath: entry.rootPath } } : { error: '共享目录不可用或授权已撤销' }
+      }, registry, resolveAuthToken: () => this.getLocalMcpAuthToken(config) })
   }
-
-  async stop(): Promise<void> {
-    await this.server.stop()
+  async syncSharing(): Promise<void> {
+    const config = this.runtimeConfig()
+    if (!config.enabled) { await this.stop(); return }
+    if (!this.server.running || this.appliedLocal !== JSON.stringify(mcpSharingStore.get().localEndpoint)) await this.startFromSettings()
+    else this.server.applyToolConfig(config)
   }
-
-  startProtocolDebug(): PromaMcpServerStatus {
-    return this.server.startProtocolDebug()
-  }
-
-  getStatus(): PromaMcpServerStatus {
-    return this.server.getStatus()
-  }
-
-  /** 更新配置并按需启动/停止/重启 */
+  async stop(): Promise<void> { await this.server.stop() }
+  startProtocolDebug(): PromaMcpServerStatus { return this.server.startProtocolDebug() }
+  getStatus(): PromaMcpServerStatus { return this.server.getStatus() }
   async applyConfig(config: PromaMcpServerConfig): Promise<PromaMcpServerStatus> {
     const normalized = normalizePromaMcpServerConfig(config)
-    const migrated = migrateLocalMcpAuth(normalized)
-    if (migrated.auth.type === 'managed-bearer') ensureManagedLocalAuthToken()
-    const wasRunning = this.server.running
-    if (wasRunning) await this.server.stop()
-    if (migrated.enabled) {
-      if (migrated.workspaces.filter((w) => w.enabled).length === 0) {
-        throw new Error('MCP Server 尚未授权任何项目，请先在设置中选择要共享的 Workspace。')
-      }
-      return this.server.start({
-        config: migrated,
-        listWorkspaces: () => listWorkspaceEntries(migrated),
-        resolveWorkspaceContext: (entryId) => {
-          try {
-            const entry = resolveWorkspaceEntry(migrated, entryId)
-            return workspaceContext(entry)
-          } catch (error) {
-            return { error: error instanceof Error ? error.message : String(error) }
-          }
-        },
-        registry,
-        resolveAuthToken: () => this.getLocalMcpAuthToken(migrated),
-      })
-    }
-    return this.getStatus()
+    const sharing = mcpSharingStore.get()
+    mcpSharingStore.save({ ...sharing, enabled: normalized.enabled, tools: normalized.tools,
+      localEndpoint: { enabled: normalized.enabled, port: normalized.port, auth: normalized.auth.type === 'none' ? 'none' : 'managed-bearer' } })
+    await this.syncSharing(); return this.getStatus()
   }
-
-  listTools(): PromaMcpToolSummary[] {
-    const settings = getSettings()
-    const config = normalizePromaMcpServerConfig(settings.mcpServer)
-    const views = buildMcpToolViews(config, registry)
-    const visible = new Set(views.map((view) => view.name))
-    // 摘要合并 registry 工具 + 多工作区固定工具
-    const seen = new Set<string>()
-    const summaries: PromaMcpToolSummary[] = []
-    for (const view of views) {
-      if (seen.has(view.name)) continue
-      seen.add(view.name)
-      const risk = view.annotations.readOnlyHint ? 'read' as const : (registry.get(view.name)?.risk ?? 'read' as const)
-      summaries.push({ name: view.name, description: view.description, risk, enabled: visible.has(view.name) })
-    }
-    for (const tool of registry.list()) {
-      if (!seen.has(tool.name)) {
-        summaries.push({ name: tool.name, description: tool.description, risk: tool.risk, enabled: false })
-      }
-    }
-    return summaries
-  }
+  listTools(): PromaMcpToolSummary[] { return buildMcpToolViews(this.runtimeConfig(), registry).map((t) => ({ name: t.name, description: t.description, risk: t.annotations.readOnlyHint ? 'read' : 'write', enabled: true })) }
 }
-
 export const promaMcpServerService = new PromaMcpServerService()

@@ -1,5 +1,7 @@
 # V10 Transport 解耦前置验证
 
+> V11 后续验收补记：用户在 V11 需求文档中确认 Cloudflare Quick 的真实 ChatGPT Scan Tools 与工具调用已通过。下文保留 V10 发布时的测试记录；此前待验收状态不代表该后续结果。Named 等其他 Provider 仍需独立验收。
+
 基线：v1.7.2 / c45b6aec。目标交付：应用 1.8.0，共享契约 0.3.0，bridge 10。
 
 2026-09-09 用户明确调整顺序为“先完成功能开发，安装后人工验收”。因此 ChatGPT Scan Tools 不再阻止本轮功能开发与安装用测试版交付；真实 ChatGPT / Named 重启复用仍单独标为待人工验收，不伪称已通过。

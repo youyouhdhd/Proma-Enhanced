@@ -66,6 +66,7 @@ import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-req
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import { sanitizePiMessageImageContent, sanitizeToolResultImageContent } from '../image-content-validation'
 import { askUserAnswersSchema } from '../ask-user-tool-schema'
+import { selectPiToolCatalog } from './pi-tool-catalog'
 import {
   convertPiMessage,
   convertResultMessage,
@@ -135,6 +136,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   piAgentDir: string
   piSessionDir: string
   customTools?: ToolDefinition[]
+  /** 受信 Main 传入的分析模式，不加载 native/product/MCP 委派工具。 */
+  exclusiveCustomTools?: boolean
   onSessionId?: (sdkSessionId: string, sessionFile?: string) => void
   /** Pi final assistant UI UUID → 持久树状 session entry ID。 */
   onPiEntryBindings?: (bindings: Record<string, string>) => void
@@ -1425,7 +1428,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       let pendingTerminalResult: SDKMessage | undefined
       /** 当前压缩是否紧随一个成功完成的主 Agent turn。 */
       let completedAgentTurnPendingCompaction = false
-      const customTools = [
+      const customTools = selectPiToolCatalog(input.exclusiveCustomTools, () => wrapCustomToolDefinitions(input.customTools, input.canUseTool), () => [
         buildCurrentSessionCompactionTool(
           sdk,
           () => { compactContextRequested = true },
@@ -1439,7 +1442,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         ),
         ...buildPromaProductToolDefinitions(sdk, input.canUseTool),
         ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),
-      ]
+      ])
 
       const settingsManager = sdk.SettingsManager.inMemory({
         // 使用 Pi SDK 原生压缩策略：

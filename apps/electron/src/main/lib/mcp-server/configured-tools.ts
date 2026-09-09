@@ -14,8 +14,6 @@ export interface ConfiguredToolsInput {
   onCall?(name: string): void
 }
 
-export const PUBLIC_READONLY_TOOLS = new Set(['workspace_list', 'workspace_info', 'list_files', 'find_files', 'search_text', 'read_file', 'read_many', 'git_status', 'git_diff', 'git_status_batch'])
-
 export function createConfiguredTools(input: ConfiguredToolsInput): McpToolHandlers {
   const list = () => buildMcpToolViews(input.config(), input.registry).filter((t) => !input.allowedNames || input.allowedNames.has(t.name))
   const dispatch = async (name: string, args: Record<string, unknown>): Promise<LocalToolResult> => {

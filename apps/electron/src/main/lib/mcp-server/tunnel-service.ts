@@ -27,6 +27,7 @@ import { computeMethodStats } from './protocol/request-trace'
 import { analyzeProtocol, isConnectorRpc, rpcSucceeded } from './protocol/protocol-negotiation'
 import type { TunnelRuntimeConfig } from './tunnel-client-types'
 import { readRemoteAccessConfig } from '../mcp-transport/config'
+import { writeJsonFileAtomic } from '../safe-file'
 
 const READY_POLL_INTERVAL_MS = 1_000
 const READY_TIMEOUT_MS = 60_000
@@ -55,6 +56,8 @@ class McpTunnelService {
   private readonly installer = new TunnelClientInstaller()
   private readonly adapter = openAiTunnelClientAdapter
   private readonly runner = new TunnelProcessRunner()
+  private remoteTarget?: { endpoint: string; token: string }
+  setRemoteTarget(target?: { endpoint: string; token: string }): void { this.remoteTarget = target }
 
   onStateChanged(listener: (state: PromaMcpTunnelState) => void): () => void {
     this.listeners.add(listener)
@@ -64,9 +67,9 @@ class McpTunnelService {
   // ===== 配置（含旧 clientCommand 一次性迁移，规范 §9） =====
 
   getConfig(): PromaMcpTunnelSettings {
-    const raw = getSettings().mcpTunnel
-    const migrated = this.migrateLegacy(raw)
-    return migrated
+    const config = readRemoteAccessConfig()
+    const provider = config.providers['openai-secure']
+    return { mode: provider?.executablePath ? 'custom-path' : 'system-path', executablePath: provider?.executablePath, tunnelId: provider?.tunnelId, autoConnect: false }
   }
 
   private migrateLegacy(raw?: Partial<PromaMcpTunnelSettings>): PromaMcpTunnelSettings {
@@ -99,7 +102,9 @@ class McpTunnelService {
   }
 
   private persistConfig(settings: PromaMcpTunnelSettings): void {
-    updateSettings({ mcpTunnel: { ...settings, clientCommand: undefined } })
+    const remote = readRemoteAccessConfig()
+    remote.providers['openai-secure'] = { ...remote.providers['openai-secure'], tunnelId: settings.tunnelId, executablePath: settings.mode === 'custom-path' ? settings.executablePath : undefined }
+    writeJsonFileAtomic(join(getConfigDir(), 'mcp-remote-access.json'), remote)
   }
 
   saveConfig(config: Partial<PromaMcpTunnelSettings>): PromaMcpTunnelState {
@@ -240,7 +245,7 @@ class McpTunnelService {
 
     // Preflight 1：本地 MCP
     this.setPhase('preflight')
-    const mcpStatus = promaMcpServerService.getStatus()
+    const mcpStatus = { ...promaMcpServerService.getStatus(), ...(this.remoteTarget ? { running: true, endpoint: this.remoteTarget.endpoint } : {}) }
     if (!mcpStatus.running) {
       return this.fail('LOCAL_MCP_NOT_RUNNING', '请先启动本地 PROMA MCP 服务（步骤 2）。', '打开本页步骤 2 并启动')
     }
@@ -276,14 +281,14 @@ class McpTunnelService {
       healthUrlFile: this.healthUrlFile,
     }
     // V6 §14：Local MCP 本机认证 → tunnel-client 经 env 引用注入 Authorization（doctor/run 一致）
-    const localToken = promaMcpServerService.getLocalMcpAuthToken()
+    const localToken = this.remoteTarget?.token ?? promaMcpServerService.getLocalMcpAuthToken()
     if (localToken) {
       runtime.localMcpAuth = { type: 'bearer', envVarName: 'PROMA_MCP_AUTH_HEADER' }
     }
     const args = this.adapter.buildRunArgs(runtime)
     try {
       const child = spawn(detection.path, args, {
-        env: this.runner.buildTunnelClientEnv({ runtimeKey, controlPlaneProxy: readRemoteAccessConfig().openai.controlPlaneProxy, ...(localToken ? { localMcpBearerToken: localToken } : {}) }),
+        env: this.runner.buildTunnelClientEnv({ runtimeKey, controlPlaneProxy: readRemoteAccessConfig().providers['openai-secure']?.controlPlaneProxy, ...(localToken ? { localMcpBearerToken: localToken } : {}) }),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         // shell 必须为 false：Windows 不经 cmd.exe（§12/§14）
@@ -417,9 +422,9 @@ class McpTunnelService {
         technical: { stdout: '', stderr: '', ...(resolved.version ? { version: resolved.version } : {}) },
       }
     }
-    const mcpStatus = promaMcpServerService.getStatus()
+    const mcpStatus = { ...promaMcpServerService.getStatus(), ...(this.remoteTarget ? { running: true, endpoint: this.remoteTarget.endpoint } : {}) }
     // V6 §14/§16：Local MCP 开启本机认证时，doctor 与 run 注入同一凭据
-    const localToken = promaMcpServerService.getLocalMcpAuthToken()
+    const localToken = this.remoteTarget?.token ?? promaMcpServerService.getLocalMcpAuthToken()
     const runtime: TunnelRuntimeConfig = {
       tunnelId: settings.tunnelId ?? '',
       mcpServerUrl: mcpStatus.endpoint || 'http://127.0.0.1:0/mcp',
@@ -430,7 +435,7 @@ class McpTunnelService {
     try {
       // V5 §4：doctor 与 run 使用同一个 buildTunnelClientEnv——凭据只经环境变量注入
       const captured = await this.runner.runCapture(resolved.path, this.adapter.buildDoctorArgs(runtime), {
-        controlPlaneProxy: readRemoteAccessConfig().openai.controlPlaneProxy,
+        controlPlaneProxy: readRemoteAccessConfig().providers['openai-secure']?.controlPlaneProxy,
         runtimeKey,
         ...(localToken ? { localMcpBearerToken: localToken } : {}),
         timeoutMs: 120_000,
@@ -450,7 +455,7 @@ class McpTunnelService {
    */
   async diagnoseConnector(windowStartedAt?: number): Promise<PromaMcpConnectorDiagnosis> {
     const checks: PromaMcpConnectorDiagnosis['checks'] = []
-    const mcpStatus = promaMcpServerService.getStatus()
+    const mcpStatus = { ...promaMcpServerService.getStatus(), ...(this.remoteTarget ? { running: true, endpoint: this.remoteTarget.endpoint } : {}) }
     // 1. Local MCP running
     checks.push({ name: '本地 PROMA MCP', state: mcpStatus.running ? 'pass' : 'fail', message: mcpStatus.running ? '已运行' : '未运行（请完成步骤 2）' })
     // 2. Local MCP /health

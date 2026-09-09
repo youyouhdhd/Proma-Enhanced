@@ -4,18 +4,19 @@ import type { McpTransportStatus } from '@proma/shared'
 import { createModernServer, type McpToolHandlers } from '../mcp-server/protocol/modern-server'
 import { readRequestBody, isMcpJsonRpc } from '../mcp-server/protocol/request-classifier'
 import { usesLegacyProtocol } from '../mcp-server/protocol/protocol-router'
-import { PUBLIC_READONLY_TOOLS } from '../mcp-server/configured-tools'
-export { PUBLIC_READONLY_TOOLS } from '../mcp-server/configured-tools'
+import { DELEGATION_TOOL_NAMES } from '../mcp-sharing/catalog'
 
 export class PublicMcpIngress {
   private server: ReturnType<typeof createServer> | undefined
   private engine: ReturnType<typeof createModernServer> | undefined
   private origin?: string
   private closing?: Promise<void>
+  private url?: string
   private readonly traces: NonNullable<McpTransportStatus['requests']> = []
   constructor(private readonly tools: McpToolHandlers, private readonly secret: () => string, private readonly probeMarker: string) {}
   setPublicOrigin(origin?: string): void { this.origin = origin }
   getRequests(): NonNullable<McpTransportStatus['requests']> { return this.traces.map((t) => ({ ...t })) }
+  getLocalUrl(): string | undefined { return this.url }
   private validHost(req: IncomingMessage): boolean {
     try {
       const host = new URL('http://' + req.headers.host)
@@ -32,8 +33,8 @@ export class PublicMcpIngress {
     if (!/^[A-Za-z0-9_-]{43,}$/.test(secret)) throw new Error('PUBLIC_CONNECTOR_SECRET_MISSING')
     this.traces.length = 0
     this.engine = createModernServer({
-      list: () => this.tools.list().filter((t) => PUBLIC_READONLY_TOOLS.has(t.name) && t.annotations.readOnlyHint),
-      call: (name, args) => PUBLIC_READONLY_TOOLS.has(name) && this.tools.list().some((t) => t.name === name && t.annotations.readOnlyHint)
+      list: () => this.tools.list().filter((t) => t.annotations.readOnlyHint || DELEGATION_TOOL_NAMES.has(t.name)),
+      call: (name, args) => this.tools.list().some((t) => t.name === name && (t.annotations.readOnlyHint || DELEGATION_TOOL_NAMES.has(t.name)))
         ? this.tools.call(name, args) : Promise.resolve({ content: [{ type: 'text', text: 'Public ingress is read-only' }], isError: true }),
     })
     const server = createServer((req, res) => {
@@ -47,7 +48,11 @@ export class PublicMcpIngress {
         if (!/^[A-Za-z0-9_-]{43,}$/.test(currentSecret)) { res.writeHead(404).end(); return }
         const expected = Buffer.from('/mcp/' + currentSecret)
         const actual = Buffer.from(req.url ?? '')
-        if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) { res.writeHead(404).end(); return }
+        const bearer = Buffer.from(req.headers.authorization ?? '')
+        const expectedBearer = Buffer.from('Bearer ' + currentSecret)
+        const validPath = expected.length === actual.length && timingSafeEqual(expected, actual)
+        const validHeader = req.url === '/mcp' && bearer.length === expectedBearer.length && timingSafeEqual(bearer, expectedBearer)
+        if (!validPath && !validHeader) { res.writeHead(404).end(); return }
         if (req.method !== 'POST') { res.writeHead(405, { allow: 'POST' }).end(); return }
         if (req.headers['mcp-session-id'] !== undefined) { res.writeHead(400).end('Modern stateless MCP required'); return }
         const body = await readRequestBody(req)
@@ -63,7 +68,8 @@ export class PublicMcpIngress {
     try {
       await new Promise<void>((done, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', done) })
       const address = server.address() as { port: number }
-      return 'http://127.0.0.1:' + address.port
+      this.url = 'http://127.0.0.1:' + address.port
+      return this.url
     } catch (error) {
       await this.stop()
       throw new Error(error && typeof error === 'object' && 'code' in error && error.code === 'EADDRINUSE' ? 'PUBLIC_INGRESS_PORT_IN_USE' : 'PUBLIC_INGRESS_START_FAILED')
@@ -72,6 +78,7 @@ export class PublicMcpIngress {
   async stop(): Promise<void> {
     if (this.closing) return this.closing
     const server = this.server; this.server = undefined
+    this.url = undefined
     const engine = this.engine; this.engine = undefined
     this.closing = (async () => {
       if (server) { server.closeAllConnections(); await new Promise<void>((done) => server.close(() => done())) }

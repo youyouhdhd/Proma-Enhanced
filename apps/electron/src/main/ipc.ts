@@ -195,6 +195,8 @@ import { codexOAuthSessionController } from './lib/codex-oauth-session-controlle
 import { mcpTunnelService } from './lib/mcp-server/tunnel-service'
 import { mcpTransportService } from './lib/mcp-transport/service'
 import { MCP_TRANSPORT_IPC } from '@proma/shared'
+import { MCP_SHARING_IPC } from '@proma/shared'
+import { mcpSharingStore } from './lib/mcp-sharing/store'
 import { loginXaiOAuth, cancelXaiOAuthLogin } from './lib/xai-oauth-service'
 import { resolvePiReasoningCapability } from './lib/adapters/pi-model-registry'
 import { serializeXaiCredentials } from '@proma/shared'
@@ -1924,16 +1926,49 @@ export function registerIpcHandlers(): void {
   )
 
   // Remote Transport：所有凭据留在主进程，复制接口不返回完整 URL。
+  ipcMain.handle(MCP_SHARING_IPC.GET, () => ({ config: mcpSharingStore.get(), health: mcpSharingStore.health(), tasks: mcpTransportService.tasks() }))
+  ipcMain.handle(MCP_SHARING_IPC.SAVE, (_, value: unknown) => mcpTransportService.saveSharing(value))
+  ipcMain.handle(MCP_SHARING_IPC.PICK_FOLDER, async () => {
+    const result = await dialog.showOpenDialog({ title: '选择明确授权的共享文件夹', properties: ['openDirectory'] })
+    return result.canceled || !result.filePaths[0] ? null : mcpSharingStore.prepareFolder(result.filePaths[0])
+  })
+  ipcMain.handle(MCP_SHARING_IPC.LINK_PROJECT, (_, rootId: string, workspaceId: string) => {
+    const config = mcpSharingStore.get()
+    const root = config.roots.find((r) => r.id === rootId)
+    if (!root) throw new Error('共享目录不存在')
+    const linked = { ...root, source: { type: 'agent-workspace' as const, agentWorkspaceId: workspaceId } }
+    if (mcpSharingStore.resolve(root).health.path !== mcpSharingStore.resolve(linked).health.path || mcpSharingStore.resolve(linked).health.state !== 'available') throw new Error('只能关联到同一目录的 PROMA 项目')
+    return mcpSharingStore.save({ ...config, roots: config.roots.map((r) => r.id === root.id ? linked : r) })
+  })
+  ipcMain.handle(MCP_SHARING_IPC.TASKS, () => mcpTransportService.tasks())
+  ipcMain.handle(MCP_SHARING_IPC.CANCEL_TASK, (_, id: string) => mcpTransportService.cancelTask(id))
+  let remoteNotifyTimer: ReturnType<typeof setTimeout> | undefined
+  const changed = new Set<string>()
+  mcpTransportService.onChanged((kind) => {
+    changed.add(kind)
+    remoteNotifyTimer ??= setTimeout(() => {
+      remoteNotifyTimer = undefined
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (window.isDestroyed()) continue
+        if (changed.has('sharing')) window.webContents.send(MCP_SHARING_IPC.CHANGED)
+        if (changed.has('config')) window.webContents.send(MCP_TRANSPORT_IPC.CONFIG_CHANGED)
+        window.webContents.send(MCP_TRANSPORT_IPC.STATUS_CHANGED)
+      }
+      changed.clear()
+    }, 80)
+  })
   ipcMain.handle(MCP_TRANSPORT_IPC.GET, () => ({ config: mcpTransportService.getConfig(), status: mcpTransportService.getStatus() }))
   ipcMain.handle(MCP_TRANSPORT_IPC.SAVE, (_, value: unknown) => mcpTransportService.save(value))
   ipcMain.handle(MCP_TRANSPORT_IPC.START, () => mcpTransportService.start())
   ipcMain.handle(MCP_TRANSPORT_IPC.STOP, () => mcpTransportService.stop())
   ipcMain.handle(MCP_TRANSPORT_IPC.DIAGNOSE, () => mcpTransportService.diagnose())
+  ipcMain.handle(MCP_TRANSPORT_IPC.DETECT, () => mcpTransportService.detect())
+  ipcMain.handle(MCP_TRANSPORT_IPC.CONFIRM_SCHEMA, () => mcpTransportService.confirmToolSchema())
   ipcMain.handle(MCP_TRANSPORT_IPC.COPY, () => mcpTransportService.copyConnectorUrl())
-  ipcMain.handle(MCP_TRANSPORT_IPC.SAVE_TOKEN, (_, token: unknown) => mcpTransportService.saveToken(token))
+  ipcMain.handle(MCP_TRANSPORT_IPC.SAVE_TOKEN, (_, token: unknown, provider?: import('@proma/shared').McpTransportKind) => mcpTransportService.saveToken(token, provider))
   ipcMain.handle(MCP_TRANSPORT_IPC.ROTATE_SECRET, () => mcpTransportService.rotateSecret())
   ipcMain.handle(MCP_TRANSPORT_IPC.PICK, async () => {
-    const result = await dialog.showOpenDialog({ title: '选择 cloudflared 程序', properties: ['openFile'] })
+    const result = await dialog.showOpenDialog({ title: '选择连接程序', properties: ['openFile'] })
     return result.canceled ? null : result.filePaths[0] ?? null
   })
 

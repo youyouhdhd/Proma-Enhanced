@@ -4,7 +4,7 @@
 
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { runReadOnlyGit } from './git-tools'
 import { toolOk } from './types'
 import type { LocalToolDefinition } from './types'
 
@@ -23,7 +23,7 @@ export const workspaceInfoTool: LocalToolDefinition = {
     const isGit = existsSync(resolve(rootPath, '.git'))
     let branch: string | undefined
     if (isGit) {
-      const res = spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: rootPath, encoding: 'utf8' })
+      const res = runReadOnlyGit(rootPath, ['symbolic-ref', '--short', 'HEAD'])
       if (res.status === 0) branch = res.stdout.trim() || undefined
     }
     return toolOk({

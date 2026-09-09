@@ -7,6 +7,7 @@
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { MCP_TRANSPORT_IPC } from '@proma/shared'
+import { MCP_SHARING_IPC } from '@proma/shared'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, QUICK_ASK_IPC_CHANNELS, MCP_SERVER_IPC_CHANNELS, MCP_TUNNEL_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
@@ -402,8 +403,18 @@ export interface ElectronAPI {
   diagnoseMcpTransport: () => Promise<import('@proma/shared').McpTransportDiagnostic>
   pickCloudflared: () => Promise<string | null>
   copyMcpConnectorUrl: () => Promise<void>
-  saveCloudflareToken: (token: string) => Promise<void>
+  saveCloudflareToken: (token: string, provider?: import('@proma/shared').McpTransportKind) => Promise<void>
   rotateMcpConnectorSecret: () => Promise<void>
+  getMcpSharing: () => Promise<{ config: import('@proma/shared').McpSharingConfig; health: import('@proma/shared').McpShareRootHealth[]; tasks: import('@proma/shared').McpRemoteTask[] }>
+  saveMcpSharing: (config: import('@proma/shared').McpSharingConfig) => Promise<import('@proma/shared').McpSharingConfig>
+  pickMcpShareFolder: () => Promise<import('@proma/shared').McpShareRoot | null>
+  linkMcpShareProject: (rootId: string, workspaceId: string) => Promise<import('@proma/shared').McpSharingConfig>
+  cancelMcpTask: (id: string) => Promise<void>
+  detectMcpProvider: () => Promise<{ ok: boolean; detail: string }>
+  confirmMcpToolSchema: () => Promise<void>
+  onMcpSharingChanged: (callback: () => void) => () => void
+  onMcpRemoteConfigChanged: (callback: () => void) => () => void
+  onMcpRemoteStatusChanged: (callback: () => void) => () => void
 
   /** 清除已保存的 Runtime API Key（UI 二次确认后调用） */
   clearMcpTunnelRuntimeKey: () => Promise<import('@proma/shared').PromaMcpTunnelState>
@@ -1483,7 +1494,7 @@ export interface ElectronAPI {
  * 实现 ElectronAPI 接口
  */
 const electronAPI: ElectronAPI = {
-  bridgeVersion: 10,
+  bridgeVersion: 11,
 
   // 运行时
   getRuntimeStatus: () => {
@@ -1768,8 +1779,18 @@ const electronAPI: ElectronAPI = {
   diagnoseMcpTransport: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.DIAGNOSE),
   pickCloudflared: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.PICK),
   copyMcpConnectorUrl: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.COPY),
-  saveCloudflareToken: (token) => ipcRenderer.invoke(MCP_TRANSPORT_IPC.SAVE_TOKEN, token),
+  saveCloudflareToken: (token, provider) => ipcRenderer.invoke(MCP_TRANSPORT_IPC.SAVE_TOKEN, token, provider),
   rotateMcpConnectorSecret: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.ROTATE_SECRET),
+  getMcpSharing: () => ipcRenderer.invoke(MCP_SHARING_IPC.GET),
+  saveMcpSharing: (config) => ipcRenderer.invoke(MCP_SHARING_IPC.SAVE, config),
+  pickMcpShareFolder: () => ipcRenderer.invoke(MCP_SHARING_IPC.PICK_FOLDER),
+  linkMcpShareProject: (rootId, workspaceId) => ipcRenderer.invoke(MCP_SHARING_IPC.LINK_PROJECT, rootId, workspaceId),
+  cancelMcpTask: (id) => ipcRenderer.invoke(MCP_SHARING_IPC.CANCEL_TASK, id),
+  detectMcpProvider: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.DETECT),
+  confirmMcpToolSchema: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.CONFIRM_SCHEMA),
+  onMcpSharingChanged: (callback) => { const listener = () => callback(); ipcRenderer.on(MCP_SHARING_IPC.CHANGED, listener); return () => { ipcRenderer.removeListener(MCP_SHARING_IPC.CHANGED, listener) } },
+  onMcpRemoteConfigChanged: (callback) => { const listener = () => callback(); ipcRenderer.on(MCP_TRANSPORT_IPC.CONFIG_CHANGED, listener); return () => { ipcRenderer.removeListener(MCP_TRANSPORT_IPC.CONFIG_CHANGED, listener) } },
+  onMcpRemoteStatusChanged: (callback) => { const listener = () => callback(); ipcRenderer.on(MCP_TRANSPORT_IPC.STATUS_CHANGED, listener); return () => { ipcRenderer.removeListener(MCP_TRANSPORT_IPC.STATUS_CHANGED, listener) } },
 
   clearMcpTunnelRuntimeKey: () => {
     return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.CLEAR_RUNTIME_KEY)

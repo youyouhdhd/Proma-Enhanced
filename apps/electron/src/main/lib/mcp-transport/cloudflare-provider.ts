@@ -19,6 +19,7 @@ export function cloudflareEnv(token?: string): NodeJS.ProcessEnv {
   const env = { ...process.env }
   for (const key of Object.keys(env)) if (key.startsWith('TUNNEL_') || key.startsWith('CLOUDFLARE_')) delete env[key]
   delete env.CONTROL_PLANE_API_KEY; delete env.CONTROL_PLANE_HTTP_PROXY; delete env.PROMA_MCP_AUTH_HEADER
+  delete env.NGROK_AUTHTOKEN
   if (token) env.TUNNEL_TOKEN = token
   return env
 }
@@ -27,9 +28,10 @@ interface CloudflareDeps {
   version(executable: string): Promise<string>
   probe: typeof probePublicMcp
   timeoutMs: number
+  changed(): void
 }
 const defaults: CloudflareDeps = {
-  spawn, probe: probePublicMcp, timeoutMs: 90_000,
+  spawn, probe: probePublicMcp, timeoutMs: 90_000, changed: () => undefined,
   version: (executable) => new Promise((done, reject) => execFile(executable, ['--version'], { windowsHide: true, timeout: 5000, env: cloudflareEnv() }, (error, stdout) => {
     if (error || !/^cloudflared version \S+/i.test(stdout.trim())) reject(new Error('CLOUDFLARED_NOT_FOUND'))
     else done(stdout.trim().slice(0, 120))
@@ -50,17 +52,14 @@ export class CloudflareProvider implements McpTransportProvider {
     private readonly marker: string, deps?: Partial<CloudflareDeps>) {
     this.status = { kind, phase: 'stopped' }; this.deps = { ...defaults, ...deps }
   }
-  private executable(): string {
-    if (this.config.cloudflare.executableMode === 'custom-path' && !this.config.cloudflare.customPath) throw new Error('CLOUDFLARED_NOT_FOUND')
-    return this.config.cloudflare.executableMode === 'custom-path' ? this.config.cloudflare.customPath! : 'cloudflared'
-  }
+  private executable(): string { return this.config.providers[this.kind]?.executablePath ?? 'cloudflared' }
   getStatus(): McpTransportStatus { return { ...this.status, endpoint: this.status.endpoint ? { ...this.status.endpoint } : undefined, requests: this.ingress.getRequests() } }
   async preflight(): Promise<McpTransportStatus> {
     const version = await this.deps.version(this.executable())
     if (this.kind === 'cloudflare-named') {
       if (!this.token()) throw new Error('CLOUDFLARE_TUNNEL_TOKEN_MISSING')
-      if (!this.config.cloudflare.hostname) throw new Error('CLOUDFLARE_NAMED_NOT_READY')
-      publicOrigin(this.config.cloudflare.hostname)
+      if (!this.config.providers[this.kind]?.hostname) throw new Error('CLOUDFLARE_NAMED_NOT_READY')
+      publicOrigin(this.config.providers[this.kind]!.hostname!)
     }
     return { kind: this.kind, phase: 'preflight', executableVersion: version }
   }
@@ -73,11 +72,12 @@ export class CloudflareProvider implements McpTransportProvider {
       const preflight = await this.preflight()
       if (epoch !== this.epoch) return this.getStatus()
       this.status = preflight
-      this.baseUrl = this.kind === 'cloudflare-named' ? publicOrigin(this.config.cloudflare.hostname!) : undefined
+      this.baseUrl = this.kind === 'cloudflare-named' ? publicOrigin(this.config.providers[this.kind]?.hostname!) : undefined
       this.ingress.setPublicOrigin(this.baseUrl)
-      const localUrl = await this.ingress.start(this.config.publicIngress.port)
-      if (epoch !== this.epoch) { await this.ingress.stop(); return this.getStatus() }
-      this.status = { ...this.status, phase: 'starting', endpoint: { localUrl } }
+      const localUrl = this.ingress.getLocalUrl()
+      if (!localUrl) throw new Error('REMOTE_INGRESS_NOT_RUNNING')
+      if (epoch !== this.epoch) return this.getStatus()
+      this.status = { ...this.status, phase: 'starting', endpoint: { localUrl } }; this.deps.changed()
       // 显式空配置隔离用户全局 ingress，避免旧 cloudflared 配置改写目标服务。
       this.scratch = mkdtempSync(join(tmpdir(), 'proma-cloudflare-'))
       const configFile = join(this.scratch, 'config.yml')
@@ -85,18 +85,25 @@ export class CloudflareProvider implements McpTransportProvider {
       const child = this.deps.spawn(this.executable(), cloudflareArgs(this.kind, localUrl, configFile), {
         env: { ...cloudflareEnv(this.kind === 'cloudflare-named' ? this.token() : undefined), HOME: this.scratch, USERPROFILE: this.scratch }, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
       })
-      this.child = child
+      this.child = child; this.status.pid = child.pid
       const fail = () => {
         if (epoch !== this.epoch) return
         this.status = { ...this.status, phase: 'error', errorCode: 'CLOUDFLARED_LAUNCH_FAILED', errorMessage: 'cloudflared 已退出，请检查程序、网络或 Named 配置。', probe: undefined }
-        abort.abort(); void this.ingress.stop()
+        abort.abort(); this.deps.changed()
       }
       child.once('error', fail); child.once('exit', fail)
       let buffer = ''
       const decoder = new StringDecoder('utf8')
       const consume = (chunk: Buffer) => {
         buffer = (buffer + decoder.write(chunk)).slice(-8192)
-        if (this.kind === 'cloudflare-quick' && !this.baseUrl) this.baseUrl = parseQuickUrl(buffer)
+        if (this.kind === 'cloudflare-quick' && !this.baseUrl) {
+          this.baseUrl = parseQuickUrl(buffer)
+          if (this.baseUrl) {
+            this.ingress.setPublicOrigin(this.baseUrl)
+            this.status.endpoint = { localUrl, publicUrl: this.baseUrl, connectorUrl: this.baseUrl + '/mcp/••••••••' }
+            this.deps.changed()
+          }
+        }
       }
       child.stdout?.on('data', consume); child.stderr?.on('data', consume)
       const deadline = Date.now() + this.deps.timeoutMs
@@ -109,7 +116,7 @@ export class CloudflareProvider implements McpTransportProvider {
             const probe = await this.deps.probe(this.baseUrl + '/mcp/' + this.secret(), this.marker, abort.signal)
             if (abort.signal.aborted || epoch !== this.epoch || child.exitCode !== null) return this.getStatus()
             this.status = { ...this.status, phase: 'ready', probe, errorCode: undefined, errorMessage: undefined }
-            return this.getStatus()
+            this.deps.changed(); return this.getStatus()
           } catch (error) { code = error instanceof Error && /^PUBLIC_MCP_[A-Z_]+$/.test(error.message) ? error.message : 'PUBLIC_MCP_UNREACHABLE' }
         }
         await new Promise<void>((done) => {
@@ -122,27 +129,33 @@ export class CloudflareProvider implements McpTransportProvider {
       throw new Error(code)
     } catch (error) {
       if (epoch !== this.epoch) return this.getStatus()
-      await this.stop()
       const code = error instanceof Error && /^[A-Z][A-Z_]+$/.test(error.message) ? error.message : 'CLOUDFLARED_LAUNCH_FAILED'
-      this.status = { kind: this.kind, phase: 'error', errorCode: code, errorMessage: '连接未就绪。检查 cloudflared、网络、域名路由和本地端口后重试。' }
+      if (this.child && this.child.exitCode === null) this.status = { ...this.status, phase: 'degraded', errorCode: code, errorMessage: '公网检查未通过，进程保留；可检查配置后重试诊断。' }
+      else this.status = { kind: this.kind, phase: 'error', errorCode: code, errorMessage: '连接未就绪。检查程序、凭据或配置。' }
+      this.deps.changed()
       return this.getStatus()
     }
   }
   async stop(): Promise<void> {
     this.epoch++; this.abort?.abort(); this.abort = undefined
-    this.baseUrl = undefined; this.status = { kind: this.kind, phase: 'stopped' }
+    this.baseUrl = undefined; this.status = { kind: this.kind, phase: 'stopped' }; this.deps.changed()
     const child = this.child; this.child = undefined
     if (child && child.exitCode === null) child.kill()
-    await this.ingress.stop()
     const scratch = this.scratch; this.scratch = undefined
     if (scratch) { try { if (realpathSync(scratch) === resolve(scratch)) rmSync(scratch, { recursive: true, force: true }) } catch { /* 子进程尚在退出时保留无凭据的临时空配置 */ } }
   }
   async diagnose(): Promise<McpTransportDiagnostic> {
-    if (this.baseUrl && this.status.phase === 'ready') {
-      try { this.status.probe = await this.deps.probe(this.baseUrl + '/mcp/' + this.secret(), this.marker, this.abort?.signal) }
-      catch { await this.stop(); this.status = { kind: this.kind, phase: 'error', errorCode: 'PUBLIC_MCP_UNREACHABLE', errorMessage: '公网 MCP 复检失败，已停止连接。' } }
+    const epoch = this.epoch
+    if (this.baseUrl && ['ready', 'degraded'].includes(this.status.phase)) {
+      try {
+        const probe = await this.deps.probe(this.baseUrl + '/mcp/' + this.secret(), this.marker, this.abort?.signal)
+        if (epoch === this.epoch) this.status = { ...this.status, phase: 'ready', probe, errorCode: undefined, errorMessage: undefined }
+      } catch {
+        if (epoch === this.epoch) this.status = { ...this.status, phase: 'degraded', errorCode: 'PUBLIC_MCP_UNREACHABLE', errorMessage: '本次复检失败；连接进程保留，可重试检查。' }
+      }
+      this.deps.changed()
     }
     const status = this.getStatus()
-    return { status, checks: [{ name: 'Public MCP 官方 Client', ok: status.phase === 'ready', detail: status.phase === 'ready' ? 'Modern、10 个只读工具和 workspace_list 已验证' : status.errorCode ?? '尚未启动' }] }
+    return { status, checks: [{ name: 'Public MCP 官方 Client', ok: status.phase === 'ready', detail: status.phase === 'ready' ? 'Modern 与当前工具目录已验证' : status.errorCode ?? '尚未启动' }] }
   }
 }

@@ -10,10 +10,12 @@ import type {
   AgentMessage,
   AgentSendInput,
 } from '@proma/shared'
+import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
+export interface HeadlessRunExtensions { piCustomTools?: ToolDefinition[]; analysisTools?: ToolDefinition[] }
 
 export interface HeadlessAgentRunCallbacks {
   onError: (error: string) => void
-  onComplete: (messages?: AgentMessage[]) => void
+  onComplete: (messages?: AgentMessage[], outcome?: { stoppedByUser?: boolean }) => void
   onTitleUpdated: (title: string) => void
   source?: AgentExternalRunSource
   /** 发起此次 headless 运行的可见会话，用于将事件路由回其 renderer。 */
@@ -23,6 +25,7 @@ export interface HeadlessAgentRunCallbacks {
 export type HeadlessAgentRunner = (
   input: AgentSendInput,
   callbacks: HeadlessAgentRunCallbacks,
+  extensions?: HeadlessRunExtensions,
 ) => Promise<void>
 
 export type AgentStopper = (sessionId: string) => void
@@ -41,11 +44,12 @@ export function setAgentStopper(stopper: AgentStopper): void {
 export async function runRegisteredHeadlessAgent(
   input: AgentSendInput,
   callbacks: HeadlessAgentRunCallbacks,
+  extensions?: HeadlessRunExtensions,
 ): Promise<void> {
   if (!headlessRunner) {
     throw new Error('Agent headless runner 尚未初始化')
   }
-  await headlessRunner(input, callbacks)
+  await headlessRunner(input, callbacks, extensions)
 }
 
 export function stopRegisteredAgent(sessionId: string): void {
