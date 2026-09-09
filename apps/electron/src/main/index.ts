@@ -54,6 +54,7 @@ function registerProtocolsAndHandlers(): void {
 import { getSettings, updateSettings } from './lib/settings-service'
 import { promaMcpServerService } from './lib/mcp-server/service'
 import { mcpTunnelService } from './lib/mcp-server/tunnel-service'
+import { mcpTransportService } from './lib/mcp-transport/service'
 import { normalizePromaMcpServerConfig } from './lib/mcp-server/config'
 import { handlePromaFileRequest } from './lib/local-file-protocol'
 
@@ -236,19 +237,19 @@ registerBridge({
 // MCP Server：把本地工具能力暴露给外部 MCP Client（如 ChatGPT Web）
 registerBridge({
   name: 'MCP Server',
-  shouldAutoStart: () => normalizePromaMcpServerConfig(getSettings().mcpServer).enabled,
+  shouldAutoStart: () => normalizePromaMcpServerConfig(getSettings().mcpServer).enabled || mcpTransportService.getConfig().autoStart,
   start: async () => {
-    await promaMcpServerService.startFromSettings()
-    // 仅当用户显式开启「启动后自动恢复连接」时才自动连接 Tunnel（规范 §24，默认关闭）
-    const tunnelSettings = getSettings().mcpTunnel
-    if (tunnelSettings?.autoConnect && tunnelSettings.tunnelId) {
-      void mcpTunnelService.start()
-    }
+    if (normalizePromaMcpServerConfig(getSettings().mcpServer).enabled) await promaMcpServerService.startFromSettings()
+    const remote = mcpTransportService.getConfig()
+    if (remote.autoStart) await mcpTransportService.start()
   },
   stop: () => {
+    void mcpTransportService.stop()
+    void mcpTunnelService.stop()
     void promaMcpServerService.stop()
   },
 })
+
 
 async function recoverEnabledFeishuBots(): Promise<void> {
   const config = getFeishuMultiBotConfig()

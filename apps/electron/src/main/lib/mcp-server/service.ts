@@ -19,6 +19,7 @@ import type { LocalToolContext } from '../local-tools'
 import { buildMcpToolViews } from './tool-adapter'
 import { PromaMcpServer } from './server'
 import type { WorkspaceDirectoryEntry } from './multi-workspace'
+import { createConfiguredTools, PUBLIC_READONLY_TOOLS } from './configured-tools'
 
 const registry: LocalToolRegistry = createDefaultLocalToolRegistry()
 
@@ -123,6 +124,26 @@ function workspaceContext(entry: WorkspaceDirectoryEntry): { context: LocalToolC
 
 class PromaMcpServerService {
   private readonly server = new PromaMcpServer()
+  hasPublicWorkspace(workspaceIds: string[]): boolean {
+    return listWorkspaceEntries(normalizePromaMcpServerConfig(getSettings().mcpServer)).some((e) => e.enabled && e.permissions.read && workspaceIds.includes(e.id))
+  }
+
+  /** Public scope 与内部启用/read 权限取交集，每次调用重新解析目录。 */
+  publicTools(workspaceIds: string[]) {
+    const config = () => normalizePromaMcpServerConfig(getSettings().mcpServer)
+    return createConfiguredTools({
+      config: () => ({ ...config(), accessMode: 'read-only', tools: { fileRead: true, search: true, git: true, fileWrite: false, shell: false } }),
+      entries: () => listWorkspaceEntries(config()).filter((e) => workspaceIds.includes(e.id) && e.permissions.read)
+        .map((e) => ({ ...e, permissions: { read: true, write: false, shell: false } })),
+      resolve: (id) => {
+        try {
+          const entry = resolveWorkspaceEntry(config(), id)
+          if (!workspaceIds.includes(id) || !entry.permissions.read) return { error: '项目没有公网读取授权' }
+          return workspaceContext({ ...entry, permissions: { read: true, write: false, shell: false } })
+        } catch { return { error: '项目不可用或读取授权已撤销' } }
+      }, registry, allowedNames: PUBLIC_READONLY_TOOLS,
+    })
+  }
 
   /** V6 §12：解析 Local MCP 生效的 Bearer token（managed-bearer → safeStorage；bearer → 配置） */
   getLocalMcpAuthToken(config?: PromaMcpServerConfig): string | undefined {

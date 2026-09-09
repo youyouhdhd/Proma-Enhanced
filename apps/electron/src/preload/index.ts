@@ -6,6 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { MCP_TRANSPORT_IPC } from '@proma/shared'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, QUICK_ASK_IPC_CHANNELS, MCP_SERVER_IPC_CHANNELS, MCP_TUNNEL_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
@@ -394,6 +395,15 @@ export interface ElectronAPI {
   startMcpProtocolDebug: () => Promise<import('@proma/shared').PromaMcpServerStatus>
   diagnoseMcpConnector: (windowStartedAt?: number) => Promise<import('@proma/shared').PromaMcpConnectorDiagnosis>
   openMcpTunnelLogs: () => Promise<void>
+  getMcpTransport: () => Promise<{ config: import('@proma/shared').PromaRemoteAccessConfig; status: import('@proma/shared').McpTransportStatus }>
+  saveMcpTransport: (config: import('@proma/shared').PromaRemoteAccessConfig) => Promise<import('@proma/shared').PromaRemoteAccessConfig>
+  startMcpTransport: () => Promise<import('@proma/shared').McpTransportStatus>
+  stopMcpTransport: () => Promise<import('@proma/shared').McpTransportStatus>
+  diagnoseMcpTransport: () => Promise<import('@proma/shared').McpTransportDiagnostic>
+  pickCloudflared: () => Promise<string | null>
+  copyMcpConnectorUrl: () => Promise<void>
+  saveCloudflareToken: (token: string) => Promise<void>
+  rotateMcpConnectorSecret: () => Promise<void>
 
   /** 清除已保存的 Runtime API Key（UI 二次确认后调用） */
   clearMcpTunnelRuntimeKey: () => Promise<import('@proma/shared').PromaMcpTunnelState>
@@ -1473,7 +1483,7 @@ export interface ElectronAPI {
  * 实现 ElectronAPI 接口
  */
 const electronAPI: ElectronAPI = {
-  bridgeVersion: 9,
+  bridgeVersion: 10,
 
   // 运行时
   getRuntimeStatus: () => {
@@ -1751,6 +1761,15 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.DIAGNOSE_CONNECTOR, windowStartedAt)
   },
   openMcpTunnelLogs: () => ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.OPEN_LOGS),
+  getMcpTransport: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.GET),
+  saveMcpTransport: (config) => ipcRenderer.invoke(MCP_TRANSPORT_IPC.SAVE, config),
+  startMcpTransport: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.START),
+  stopMcpTransport: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.STOP),
+  diagnoseMcpTransport: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.DIAGNOSE),
+  pickCloudflared: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.PICK),
+  copyMcpConnectorUrl: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.COPY),
+  saveCloudflareToken: (token) => ipcRenderer.invoke(MCP_TRANSPORT_IPC.SAVE_TOKEN, token),
+  rotateMcpConnectorSecret: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.ROTATE_SECRET),
 
   clearMcpTunnelRuntimeKey: () => {
     return ipcRenderer.invoke(MCP_TUNNEL_IPC_CHANNELS.CLEAR_RUNTIME_KEY)

@@ -40,7 +40,7 @@ export class TunnelProcessRunner {
    * 统一凭据环境：run / doctor / 未来诊断共用（V5 §4 / V6 §14）。
    * Key 与 Local MCP Bearer 只经环境变量注入，绝不进 argv。
    */
-  buildTunnelClientEnv(input: { runtimeKey: string; localMcpBearerToken?: string }): NodeJS.ProcessEnv {
+  buildTunnelClientEnv(input: { runtimeKey: string; localMcpBearerToken?: string; controlPlaneProxy?: string }): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       CONTROL_PLANE_API_KEY: input.runtimeKey,
@@ -48,6 +48,9 @@ export class TunnelProcessRunner {
     if (input.localMcpBearerToken) {
       env.PROMA_MCP_AUTH_HEADER = 'Bearer ' + input.localMcpBearerToken
     }
+    if (input.controlPlaneProxy) env.CONTROL_PLANE_HTTP_PROXY = input.controlPlaneProxy
+    const bypass = [...new Set([...(env.NO_PROXY ?? env.no_proxy ?? '').split(',').filter(Boolean), '127.0.0.1', 'localhost'])].join(',')
+    env.NO_PROXY = bypass; env.no_proxy = bypass
     return env
   }
 
@@ -55,10 +58,10 @@ export class TunnelProcessRunner {
   async runCapture(
     executable: string,
     args: string[],
-    options: { runtimeKey?: string; localMcpBearerToken?: string; timeoutMs?: number },
+    options: { runtimeKey?: string; localMcpBearerToken?: string; timeoutMs?: number; controlPlaneProxy?: string },
   ): Promise<CapturedProcessResult> {
     const env = options.runtimeKey !== undefined
-      ? this.buildTunnelClientEnv({ runtimeKey: options.runtimeKey, ...(options.localMcpBearerToken ? { localMcpBearerToken: options.localMcpBearerToken } : {}) })
+      ? this.buildTunnelClientEnv({ runtimeKey: options.runtimeKey, controlPlaneProxy: options.controlPlaneProxy, ...(options.localMcpBearerToken ? { localMcpBearerToken: options.localMcpBearerToken } : {}) })
       : { ...process.env }
     return new Promise<CapturedProcessResult>((resolve) => {
       const child = spawn(executable, args, {

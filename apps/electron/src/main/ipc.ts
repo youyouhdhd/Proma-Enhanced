@@ -193,6 +193,8 @@ import {
 } from './lib/channel-manager'
 import { codexOAuthSessionController } from './lib/codex-oauth-session-controller'
 import { mcpTunnelService } from './lib/mcp-server/tunnel-service'
+import { mcpTransportService } from './lib/mcp-transport/service'
+import { MCP_TRANSPORT_IPC } from '@proma/shared'
 import { loginXaiOAuth, cancelXaiOAuthLogin } from './lib/xai-oauth-service'
 import { resolvePiReasoningCapability } from './lib/adapters/pi-model-registry'
 import { serializeXaiCredentials } from '@proma/shared'
@@ -1920,6 +1922,20 @@ export function registerIpcHandlers(): void {
       return mcpTunnelService.doctor()
     }
   )
+
+  // Remote Transport：所有凭据留在主进程，复制接口不返回完整 URL。
+  ipcMain.handle(MCP_TRANSPORT_IPC.GET, () => ({ config: mcpTransportService.getConfig(), status: mcpTransportService.getStatus() }))
+  ipcMain.handle(MCP_TRANSPORT_IPC.SAVE, (_, value: unknown) => mcpTransportService.save(value))
+  ipcMain.handle(MCP_TRANSPORT_IPC.START, () => mcpTransportService.start())
+  ipcMain.handle(MCP_TRANSPORT_IPC.STOP, () => mcpTransportService.stop())
+  ipcMain.handle(MCP_TRANSPORT_IPC.DIAGNOSE, () => mcpTransportService.diagnose())
+  ipcMain.handle(MCP_TRANSPORT_IPC.COPY, () => mcpTransportService.copyConnectorUrl())
+  ipcMain.handle(MCP_TRANSPORT_IPC.SAVE_TOKEN, (_, token: unknown) => mcpTransportService.saveToken(token))
+  ipcMain.handle(MCP_TRANSPORT_IPC.ROTATE_SECRET, () => mcpTransportService.rotateSecret())
+  ipcMain.handle(MCP_TRANSPORT_IPC.PICK, async () => {
+    const result = await dialog.showOpenDialog({ title: '选择 cloudflared 程序', properties: ['openFile'] })
+    return result.canceled ? null : result.filePaths[0] ?? null
+  })
 
   ipcMain.handle(MCP_TUNNEL_IPC_CHANNELS.OPEN_LOGS, async (): Promise<void> => {
     const { getTunnelLogUrl } = await import('./lib/mcp-server/tunnel-log-url')

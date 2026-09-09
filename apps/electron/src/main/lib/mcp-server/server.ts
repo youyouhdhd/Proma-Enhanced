@@ -12,25 +12,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { localhostHostValidation, localhostOriginValidation } from '@modelcontextprotocol/node'
 import { normalizePromaMcpServerConfig } from './config'
-import { buildMcpToolViews, visibleToolNames } from './tool-adapter'
+import { createConfiguredTools } from './configured-tools'
 import { isRequestAuthorized } from './auth'
 import { captureRpcResponse, extractSafeRequestMetadata } from './protocol/request-trace'
 import { createModernServer, MCP_SERVER_INFO, MODERN_PROTOCOL_VERSION, type McpToolHandlers } from './protocol/modern-server'
 import { LegacyMcpServer } from './protocol/legacy-server'
 import { usesLegacyProtocol } from './protocol/protocol-router'
 import { classifyRequest, readRequestBody } from './protocol/request-classifier'
-import {
-  resolveTargetWorkspace,
-  assertToolPermission,
-  handleWorkspaceList,
-  handleReadMany,
-  handleGitStatusBatch,
-  handleCrossWorkspaceSearch,
-  type WorkspaceDirectoryEntry,
-  type WorkspaceContextResolver,
-} from './multi-workspace'
+import type { WorkspaceDirectoryEntry } from './multi-workspace'
 import type { PromaMcpRequestTrace, PromaMcpServerConfig, PromaMcpServerStatus } from '@proma/shared'
-import type { LocalToolRegistry, LocalToolContext, LocalToolResult } from '../local-tools'
+import type { LocalToolRegistry, LocalToolContext } from '../local-tools'
 
 const validateHost = localhostHostValidation()
 const validateOrigin = localhostOriginValidation()
@@ -175,21 +166,11 @@ export class PromaMcpServer {
   }
 
   private toolHandlers(profileId?: string): McpToolHandlers {
-    return {
-      list: () => this.config && this.registry ? buildMcpToolViews(this.config, this.registry) : [],
-      call: async (name, args) => {
-        if (!this.registry || !this.config || !this.resolveWorkspaceContext) throw new Error('MCP 未运行')
-        const result: LocalToolResult = visibleToolNames(this.config, this.registry).has(name)
-          ? await this.dispatchToolCall(name, args, profileId, this.resolveWorkspaceContext, this.registry)
-          : { ok: false, error: { code: 'PERMISSION_DENIED', message: '工具未启用' } }
-        this.lastToolCall = { name, at: Date.now() }
-        return {
-          content: [{ type: 'text', text: result.text ?? JSON.stringify(result.ok ? result.data ?? {} : result.error) }],
-          ...(result.ok && result.data ? { structuredContent: result.data } : {}),
-          isError: !result.ok,
-        }
-      },
-    }
+    if (!this.registry || !this.config || !this.resolveWorkspaceContext) throw new Error('MCP 未运行')
+    return createConfiguredTools({ config: () => this.config!, entries: () => this.scopedEntries(profileId),
+      resolve: this.resolveWorkspaceContext, registry: this.registry,
+      onCall: (name) => { this.lastToolCall = { name, at: Date.now() } },
+    })
   }
 
   private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -292,44 +273,4 @@ export class PromaMcpServer {
     }
   }
 
-  /** 统一工具分发：多工作区固定工具 + 单工作区工具（显式解析 workspace、按仓库权限放行） */
-  private async dispatchToolCall(
-    name: string,
-    args: Record<string, unknown>,
-    profileId: string | undefined,
-    resolveContext: StartInput['resolveWorkspaceContext'],
-    registry: LocalToolRegistry,
-  ): Promise<LocalToolResult> {
-    const entries = this.scopedEntries(profileId)
-    const scopedResolver: WorkspaceContextResolver = (entryId: string) => {
-      if (!entries.some((e) => e.id === entryId)) return { error: 'workspace 不在当前 endpoint 的授权范围内' }
-      return resolveContext(entryId)
-    }
-
-    if (name === 'workspace_list') return handleWorkspaceList(entries)
-    if (name === 'read_many') return handleReadMany(args, entries, scopedResolver, registry)
-    if (name === 'git_status_batch') return handleGitStatusBatch(args, entries, scopedResolver, registry)
-    if (name === 'search_text' && Array.isArray(args.workspace_ids) && args.workspace_ids.length > 0) {
-      return handleCrossWorkspaceSearch(args, entries, scopedResolver, registry)
-    }
-
-    const definition = registry.get(name)
-    if (!definition) {
-      return { ok: false, error: { code: 'INVALID_INPUT', message: '未知工具: ' + name } }
-    }
-    this.lastToolCall = { name, at: Date.now() }
-    const resolved = resolveTargetWorkspace(args.workspace_id, entries)
-    if ('error' in resolved) return { ok: false, error: resolved.error }
-    const permissionError = assertToolPermission(definition.risk, resolved.entry.permissions)
-    if (permissionError) return { ok: false, error: permissionError }
-    const ctx = scopedResolver(resolved.entry.id)
-    if ('error' in ctx) {
-      return { ok: false, error: { code: 'INVALID_INPUT', message: ctx.error } }
-    }
-    // workspace_id 是网关层参数，不透传给工具实现
-    const toolArgs: Record<string, unknown> = { ...args }
-    delete toolArgs.workspace_id
-    delete toolArgs.workspace_ids
-    return definition.execute(toolArgs, ctx.context)
-  }
 }

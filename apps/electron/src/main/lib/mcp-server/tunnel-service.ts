@@ -26,6 +26,7 @@ import { classifyConnectorConclusion } from './tunnel-doctor-parser'
 import { computeMethodStats } from './protocol/request-trace'
 import { analyzeProtocol, isConnectorRpc, rpcSucceeded } from './protocol/protocol-negotiation'
 import type { TunnelRuntimeConfig } from './tunnel-client-types'
+import { readRemoteAccessConfig } from '../mcp-transport/config'
 
 const READY_POLL_INTERVAL_MS = 1_000
 const READY_TIMEOUT_MS = 60_000
@@ -40,7 +41,7 @@ const STOPPED_STATE: PromaMcpTunnelState = {
 }
 
 function defaultTunnelSettings(): PromaMcpTunnelSettings {
-  return { mode: 'managed' }
+  return { mode: 'system-path' }
 }
 
 class McpTunnelService {
@@ -51,7 +52,7 @@ class McpTunnelService {
   private pollTimer: ReturnType<typeof setTimeout> | null = null
   private readonly listeners = new Set<(state: PromaMcpTunnelState) => void>()
   private readonly manager = new TunnelClientManager({ configDir: () => getConfigDir() })
-  private readonly installer = new TunnelClientInstaller(this.manager, { configDir: () => getConfigDir() })
+  private readonly installer = new TunnelClientInstaller()
   private readonly adapter = openAiTunnelClientAdapter
   private readonly runner = new TunnelProcessRunner()
 
@@ -212,11 +213,8 @@ class McpTunnelService {
   }
 
   async installClient(): Promise<PromaMcpTunnelDetection> {
-    this.emit() // UI 可立即显示安装中
-    const detection = await this.installer.install()
-    this.state = { ...this.state, client: this.clientInfoFrom(detection), ...(detection.installed ? { phase: this.idlePhaseFor(detection) } : {}) }
-    this.emit()
-    return detection
+    // 兼容旧 bridge 调用，不请求网络，也不把正在运行的连接改成“未安装”。
+    return this.installer.install()
   }
 
   private clientInfoFrom(detection: PromaMcpTunnelDetection): PromaMcpTunnelState['client'] {
@@ -285,7 +283,7 @@ class McpTunnelService {
     const args = this.adapter.buildRunArgs(runtime)
     try {
       const child = spawn(detection.path, args, {
-        env: this.runner.buildTunnelClientEnv({ runtimeKey, ...(localToken ? { localMcpBearerToken: localToken } : {}) }),
+        env: this.runner.buildTunnelClientEnv({ runtimeKey, controlPlaneProxy: readRemoteAccessConfig().openai.controlPlaneProxy, ...(localToken ? { localMcpBearerToken: localToken } : {}) }),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         // shell 必须为 false：Windows 不经 cmd.exe（§12/§14）
@@ -432,6 +430,7 @@ class McpTunnelService {
     try {
       // V5 §4：doctor 与 run 使用同一个 buildTunnelClientEnv——凭据只经环境变量注入
       const captured = await this.runner.runCapture(resolved.path, this.adapter.buildDoctorArgs(runtime), {
+        controlPlaneProxy: readRemoteAccessConfig().openai.controlPlaneProxy,
         runtimeKey,
         ...(localToken ? { localMcpBearerToken: localToken } : {}),
         timeoutMs: 120_000,

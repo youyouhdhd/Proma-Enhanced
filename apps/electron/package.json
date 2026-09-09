@@ -1,6 +1,6 @@
 {
   "name": "@proma/electron",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "description": "Proma，为专业用户设计的 Agent",
   "main": "dist/main.cjs",
   "author": {
@@ -55,7 +55,9 @@
     "dist:linux": "bun run build && bun run sync:runtime-deps && bun run prepare:node-pty && electron-builder --linux",
     "dist:visual": "bun run scripts/dist.ts",
     "dist:fast": "bun run scripts/dist.ts --current-arch --dmg",
-    "dist:debug": "bun run scripts/dist.ts --current-arch --verbose"
+    "dist:debug": "bun run scripts/dist.ts --current-arch --verbose",
+    "test:mcp-public-ingress": "bun test src/main/lib/mcp-transport/public-ingress.test.ts",
+    "test:mcp-transport": "bun test src/main/lib/mcp-transport/transport.test.ts"
   },
   "dependencies": {
     "@codemirror/language": "^6.12.4",
@@ -83,14 +85,14 @@
     "node-pty": "^1.1.0",
     "pdfjs-dist": "^4.10.38",
     "sharp": "^0.35.3",
-    "typebox": "1.1.38"
+    "typebox": "1.1.38",
+    "@modelcontextprotocol/client": "2.0.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
     "@emoji-mart/data": "^1.2.1",
     "@emoji-mart/react": "^1.1.1",
     "@larksuiteoapi/node-sdk": "^1.65.0",
-    "@modelcontextprotocol/client": "2.0.0",
     "@proma/core": "workspace:*",
     "@proma/session-core": "workspace:*",
     "@proma/shared": "workspace:*",

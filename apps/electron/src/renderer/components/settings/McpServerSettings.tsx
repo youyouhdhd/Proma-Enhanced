@@ -8,7 +8,7 @@
 
 import * as React from 'react'
 import { atom, useAtom } from 'jotai'
-import { Loader2, Play, Square, RefreshCw, TerminalSquare, FolderGit2, ShieldCheck, Globe, Plug, Stethoscope, Trash2, Plus, KeyRound, ExternalLink, Download, FolderOpen } from 'lucide-react'
+import { Loader2, Play, Square, RefreshCw, TerminalSquare, FolderGit2, ShieldCheck, Globe, Plug, Stethoscope, Trash2, Plus, KeyRound, ExternalLink, FolderOpen } from 'lucide-react'
 import type { PromaMcpServerConfig, PromaMcpServerStatus, PromaMcpToolSummary, PromaMcpTunnelState, PromaMcpWorkspaceEntry, PromaMcpTunnelDoctorResult, PromaMcpTunnelDetection, PromaMcpTunnelClientMode, PromaMcpConnectorDiagnosis, AgentWorkspace } from '@proma/shared'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,6 +19,7 @@ import { SettingsCard } from './primitives/SettingsCard'
 import { DEFAULT_MCP_CONFIG, FALLBACK_TUNNEL_STATE, getMcpApiCapabilities, isBridgeOutdated, normalizeRendererMcpConfig, normalizeTunnelState, REQUIRED_MCP_BRIDGE_VERSION } from './mcp-settings-defense'
 import { cn } from '@/lib/utils'
 import { formatProtocolExport, formatProtocolTrace } from './mcp-protocol-export'
+import { RemoteAccessSettings } from './RemoteAccessSettings'
 
 const protocolMessageAtom = atom('')
 const diagnosingAtom = atom(false)
@@ -54,7 +55,6 @@ function tunnelPhaseLabel(state: PromaMcpTunnelState | null): { text: string; to
 }
 
 const MODE_OPTIONS: Array<{ mode: PromaMcpTunnelClientMode; label: string; hint: string }> = [
-  { mode: 'managed', label: '由 PROMA 自动管理（推荐）', hint: 'PROMA 负责下载、更新和运行官方组件，全程无需终端。' },
   { mode: 'custom-path', label: '使用本机已有程序', hint: '指定本机已有的 tunnel-client 可执行文件，PROMA 负责运行。' },
   { mode: 'system-path', label: '从系统 PATH 查找（高级）', hint: '使用已加入系统 PATH 的 tunnel-client 命令。' },
 ]
@@ -63,12 +63,17 @@ const MODE_OPTIONS: Array<{ mode: PromaMcpTunnelClientMode; label: string; hint:
 const DOCTOR_EXTENDED_CHECKS = new Set(['配置来源', '配置加载', 'Tunnels 管理地址', 'Runtime API Keys 地址', '管理密钥地址', 'ChatGPT Connector 设置地址', 'Tunnel 本地管理界面'])
 
 export function McpServerSettings(): React.ReactElement {
+  if (typeof window === 'undefined' || (window.electronAPI?.bridgeVersion ?? 0) < 10) return <LocalMcpSettings />
+  return <div className="space-y-5"><RemoteAccessSettings /><details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm font-medium">本机 MCP 与项目管理 / OpenAI Secure Tunnel 实验性设置</summary><LocalMcpSettings /></details></div>
+}
+
+function LocalMcpSettings(): React.ReactElement {
   const [config, setConfig] = React.useState<PromaMcpServerConfig>(DEFAULT_MCP_CONFIG)
   const [status, setStatus] = React.useState<PromaMcpServerStatus | null>(null)
   const [tools, setTools] = React.useState<PromaMcpToolSummary[]>([])
   const [workspaces, setWorkspaces] = React.useState<AgentWorkspace[]>([])
   const [tunnel, setTunnel] = React.useState<PromaMcpTunnelState | null>(null)
-  const [tunnelMode, setTunnelMode] = React.useState<PromaMcpTunnelClientMode>('managed')
+  const [tunnelMode, setTunnelMode] = React.useState<PromaMcpTunnelClientMode>('system-path')
   const [tunnelIdInput, setTunnelIdInput] = React.useState('')
   const [runtimeKeyInput, setRuntimeKeyInput] = React.useState('')
   const [customPathInput, setCustomPathInput] = React.useState('')
@@ -94,7 +99,7 @@ export function McpServerSettings(): React.ReactElement {
       setConfig(nextConfig)
       setStatus(serverStatus)
       setTools(toolSummaries)
-      setTunnelMode(appSettings.mcpTunnel?.mode ?? 'managed')
+      setTunnelMode(appSettings.mcpTunnel?.mode ?? 'system-path')
       setTunnelIdInput(appSettings.mcpTunnel?.tunnelId ?? '')
       setCustomPathInput(appSettings.mcpTunnel?.executablePath ?? '')
       setAutoConnect(appSettings.mcpTunnel?.autoConnect === true)
@@ -222,13 +227,6 @@ export function McpServerSettings(): React.ReactElement {
 
   const detectClient = async (): Promise<void> => {
     setDetection(await window.electronAPI.detectMcpTunnelClient())
-  }
-
-  const installClient = async (): Promise<void> => {
-    setDetection(null)
-    const result = await window.electronAPI.installMcpTunnelClient()
-    setDetection(result)
-    setTunnel(await window.electronAPI.getMcpTunnelState())
   }
 
   const saveTunnelId = async (): Promise<void> => {
@@ -602,9 +600,9 @@ export function McpServerSettings(): React.ReactElement {
                   </div>
                 ) : (
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs text-muted-foreground">尚未安装。这是连接 ChatGPT Web 所需的 OpenAI 官方本地连接组件。</span>
-                    <Button size="sm" type="button" className="h-7" disabled={tunnel?.phase === 'preflight'} onClick={() => void installClient()}>
-                      <Download size={13} /> 安装官方组件
+                    <span className="text-xs text-muted-foreground">旧托管配置尚无可用程序。自动安装已停用，请选择已有的完整 CLI 或改用 PATH。</span>
+                    <Button size="sm" type="button" className="h-7" onClick={() => void pickAndSaveExecutable()}>
+                      <FolderOpen size={13} /> 选择已有程序
                     </Button>
                   </div>
                 )}

@@ -106,7 +106,7 @@ export function getMcpApiCapabilities(): McpApiCapabilities {
 }
 
 /** 本页要求的最低 bridge 版本（V6 §33） */
-export const REQUIRED_MCP_BRIDGE_VERSION = 9
+export const REQUIRED_MCP_BRIDGE_VERSION = 10
 
 /** bridge 版本过旧判定：无法读取版本时视为兼容（避免误伤旧 preload 的基础能力） */
 export function isBridgeOutdated(capabilities: McpApiCapabilities): boolean {
