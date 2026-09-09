@@ -5,7 +5,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { guardWorkspacePath } from './security'
 import { toolOk, toolError } from './types'
@@ -22,7 +22,14 @@ export function runReadOnlyGit(rootPath: string, args: string[]): { stdout: stri
   const top = spawnSync('git', [...prefix, 'rev-parse', '--show-toplevel'], options)
   try {
     const normalize = (path: string) => process.platform === 'win32' ? realpathSync(resolve(path)).toLowerCase() : realpathSync(resolve(path))
-    if (top.status !== 0 || normalize(top.stdout.trim()) !== normalize(rootPath)) return { status: 1, stdout: '', stderr: '共享目录必须是独立 Git 根目录，不能向上读取其他目录的仓库' }
+    if (top.status !== 0) return { status: 1, stdout: '', stderr: top.stderr.trim() || '无法定位 Git 根目录' }
+    const reported = normalize(top.stdout.trim())
+    const requested = normalize(rootPath)
+    const left = statSync(reported, { bigint: true })
+    const right = statSync(requested, { bigint: true })
+    // Windows runner 的 TEMP 可能采用 8.3 短名称；比较目录身份兼容 Git 返回的长名称。
+    const sameDirectory = reported === requested || left.ino !== 0n && left.ino === right.ino && left.dev === right.dev
+    if (!sameDirectory) return { status: 1, stdout: '', stderr: '共享目录必须是独立 Git 根目录，不能向上读取其他目录的仓库' }
   } catch { return { status: 1, stdout: '', stderr: 'Git 根目录不可用' } }
   // 禁止 clean/process/textconv/external-diff 让“读取”启动仓库提供的外部程序。
   const filterNames = spawnSync('git', [...prefix, 'config', '--null', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'], options)
@@ -45,7 +52,7 @@ export const gitStatusTool: LocalToolDefinition = {
   async execute(_input, context) {
     let branch = runReadOnlyGit(context.rootPath, ['symbolic-ref', '--short', 'HEAD'])
     if (branch.status !== 0) branch = runReadOnlyGit(context.rootPath, ['rev-parse', '--short', 'HEAD'])
-    if (branch.status !== 0) return toolError('GIT_ERROR', '当前目录不是 Git 仓库')
+    if (branch.status !== 0) return toolError('GIT_ERROR', branch.stderr.trim() || '当前目录不是 Git 仓库')
     const status = runReadOnlyGit(context.rootPath, ['status', '--porcelain=v1', '-b'])
     if (status.status !== 0) return toolError('GIT_ERROR', status.stderr.trim() || 'git status 执行失败')
     return toolOk({ branch: branch.stdout.trim(), status: status.stdout.slice(0, MAX_OUTPUT_CHARS) }, status.stdout.slice(0, MAX_OUTPUT_CHARS))

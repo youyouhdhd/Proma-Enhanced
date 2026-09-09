@@ -17,7 +17,8 @@ it('Given 带可执行过滤器的仓库 When 只读 Git 工具运行 Then 不�
     git(['config', 'filter.unsafe.clean', command]); git(['config', 'diff.unsafe.textconv', command]); git(['config', 'diff.external', command]); git(['config', 'core.fsmonitor', command])
     writeFileSync(join(root, 'sample.txt'), 'changed\n')
     const context = { rootPath: root, workspaceId: 'ws_test' }
-    expect((await gitStatusTool.execute({}, context)).ok).toBe(true)
+    const status = await gitStatusTool.execute({}, context)
+    expect(status.ok, JSON.stringify(status)).toBe(true)
     expect((await gitDiffTool.execute({}, context)).ok).toBe(true)
     expect(existsSync(join(root, 'UNSAFE_EXECUTED'))).toBe(false)
     mkdirSync(join(root, 'subdir'))
