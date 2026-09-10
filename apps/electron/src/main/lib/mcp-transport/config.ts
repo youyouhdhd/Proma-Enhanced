@@ -40,10 +40,16 @@ export function normalizeRemoteConfig(value: unknown, hasNgrokSecret = false): P
     if (item.hostname) normalized.hostname = publicOrigin(item.hostname)
     if (kind === 'ngrok') {
       normalized.authSource = item.authSource === 'proma-secret' || raw.version === 2 && !item.authSource && hasNgrokSecret ? 'proma-secret' : 'system-config'
+      if (item.mode !== undefined && !['proma-managed', 'system', 'external-existing'].includes(item.mode)) throw new Error('NGROK_MODE_INVALID')
+      normalized.mode = item.mode ?? (normalized.authSource === 'proma-secret' ? 'proma-managed' : 'system')
+      normalized.credentialMode = normalized.mode === 'proma-managed' ? 'proma-secret' : 'system-config'
+      normalized.authSource = normalized.credentialMode
+      normalized.domainConfirmed = item.domainConfirmed === true
       normalized.configSource = item.configSource === 'custom' ? 'custom' : 'default'
       normalized.endpointMode = item.endpointMode === 'auto-domain' ? 'auto-domain' : 'fixed-domain'
       normalized.webInspector = item.webInspector === 'disabled' ? 'disabled' : 'default'
-      if (item.configPath) {
+      if (normalized.mode === 'proma-managed') normalized.configSource = 'default'
+      if (item.configPath && normalized.mode === 'system') {
         if (typeof item.configPath !== 'string' || !isAbsolute(item.configPath) || item.configPath.includes('\0')) throw new Error('NGROK_CONFIG_INVALID')
         normalized.configPath = item.configPath
       }

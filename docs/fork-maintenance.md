@@ -1,12 +1,19 @@
 # Proma Fork 维护与上游同步指南
 
-记录版本：0.1.6
-最后核对：2026-09-05
+记录版本：0.1.7
+最后核对：2026-09-11
 适用对象：维护 `youyouhdhd/Proma-Enhanced` Fork（官方上游 `proma-ai/Proma`）的开发者
 
 本文的目标是让维护者在 `proma-ai/Proma` 发布新版本后，能够先取得上游更新，再有边界地重放本 Fork 的定制功能。它记录当前仓库的真实分叉状态、定制提交和已知冲突区域；不把上游代码复制成第二份，也不建议直接在 `main` 上试错。
 
 ## 当前仓库状态
+
+### 2026-09-11：v1.11.0 发布
+
+- v1.11.0 固定为用户已实测可用的 V13 版本：Managed ngrok 隔离、安全 Endpoint 复用、Provider 引导、统一设置帮助与零等待队列。
+- 应用 1.11.0、shared 0.6.0、Bridge 13；发布说明见 [v1.11.0](../release-notes/v1.11.0.md)。
+- 此标签已合入的上游基线为 `7a3721d7cfe6e107b58c79e27a43fa463dac21ee`。较新的 `f99edbdb594407ab190b97ae073889c5d96637ab` 在本版本发布后单独合并，避免改变实测发布基线。
+- 上游同步必须保留 Fork 的 Pi runtime、显式项目指令边界、MCP 四层 IPC、safeStorage、权限撤销、Managed ngrok 所有权以及原有 QuickAsk/推理档位定制。
 
 ### 远端关系
 

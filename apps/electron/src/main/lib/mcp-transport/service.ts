@@ -11,8 +11,9 @@ import { normalizeRemoteConfig, readRemoteAccessConfig, remoteApplyImpact } from
 import { TransportSecretStore } from './secret-store'
 import { PublicMcpIngress } from './public-ingress'
 import { CloudflareProvider } from './cloudflare-provider'
-import { NetworkProvider, runProviderCommand } from './network-provider'
+import { NetworkProvider } from './network-provider'
 import { NgrokProvider } from './ngrok-provider'
+import { detectProviderBinary } from './provider-binary'
 import { REMOTE_PROVIDERS } from './provider-registry'
 import type { McpTransportProvider } from './types'
 import { mcpSharingStore } from '../mcp-sharing/store'
@@ -150,41 +151,41 @@ class McpTransportService {
   }
   async diagnose(): Promise<McpTransportDiagnostic> {
     const health = mcpSharingStore.health()
-    const checks = [
-      { name: 'Shared Roots', ok: health.length > 0 && health.every((root) => root.state === 'available'), detail: health.length ? health.map((root) => `${root.id}: ${root.state}`).join('；') : '请先添加共享项目' },
-      { name: 'Tool Catalog', ok: this.catalog.list().length > 0, detail: `${this.catalog.list().length} 个工具；检查全局策略和工具开关` },
-      { name: 'Remote Ingress', ok: Boolean(this.ingress?.getLocalUrl()), detail: this.ingress?.getLocalUrl() ?? '尚未启动，请启动远程连接' },
+    const checks: McpTransportDiagnostic['checks'] = [
+      { name: 'Shared Roots', ok: health.length > 0 && health.every((root) => root.state === 'available'), detail: health.length ? health.map((root) => `${root.id}: ${root.state}`).join('；') : '请先添加共享项目', nextAction: '启用至少一个可访问的共享项目' },
+      { name: 'Tool Catalog', ok: this.catalog.list().length > 0, detail: `${this.catalog.list().length} 个工具`, nextAction: '检查全局共享策略和工具开关' },
+      { name: 'Remote Ingress', ok: Boolean(this.ingress?.getLocalUrl()), detail: this.ingress?.getLocalUrl() ?? '尚未启动', nextAction: '启动远程连接；端口冲突时在高级设置修改本机端口' },
     ]
-    const detected = await this.detect()
-    checks.push({ name: 'Provider Binary / Config', ok: detected.ok, detail: detected.detail })
-    const result = this.provider ? await this.provider.diagnose() : undefined
+    const config = this.getConfig()
+    const store = this.secrets()
+    // 未启动时也可自检配置，但不创建 profile、启动 ingress 或改写凭据。
+    const diagnosticProvider = this.provider ?? (config.provider === 'ngrok' ? new NgrokProvider(config.providers.ngrok ?? {},
+      new PublicMcpIngress(this.catalog, () => store.read('connector') ?? '', this.marker),
+      () => store.read('connector') ?? '', () => store.read('ngrok'), this.marker, () => undefined) : undefined)
+    const result = diagnosticProvider ? await diagnosticProvider.diagnose() : undefined
     const status = this.getStatus()
-    checks.push({ name: 'Provider Process / Connection', ok: ['ready', 'degraded'].includes(status.phase), detail: `状态 ${status.phase}，PID ${status.pid ?? '外部管理或未运行'}` })
-    if (result) checks.push(...result.checks)
-    checks.push({ name: 'MCP Discovery / tools/list', ok: status.probe?.modern === true, detail: status.probe ? `${status.probe.toolCount} 个工具` : '未完成公网 MCP 探测，请查看 Provider 日志' },
-      { name: 'workspace_list', ok: status.probe?.workspaceList === true, detail: status.probe?.workspaceList ? '已通过' : '未验证或读取工具未开放' })
-    return { status, checks }
+    if (result) checks.push(...result.checks.filter((check) => check.name !== 'ngrok 公网 MCP'))
+    else { const detected = await this.detect(); checks.push({ name: 'Provider Binary', ok: detected.ok, detail: detected.detail, nextAction: '安装对应官方程序后重新检测' }) }
+    checks.push({ name: 'Provider Process / Connection', ok: ['ready', 'degraded'].includes(status.phase), detail: `状态 ${status.phase}，PID ${status.pid ?? '外部管理或未运行'}`, nextAction: '检查 Endpoint 所有权及 Provider 日志，然后启动连接' },
+      { name: 'Public HTTPS', ok: status.probe?.modern === true && status.phase === 'ready', detail: status.endpoint?.publicUrl ?? '尚无已验证公网地址', nextAction: '检查专用 Domain、云端认证及网络状态' },
+      { name: 'MCP Discovery', ok: status.probe?.modern === true, detail: status.probe?.modern ? 'Modern MCP 通过' : '未通过', nextAction: '确认公网转发到当前 PROMA 的 Remote Ingress' },
+      { name: 'tools/list', ok: (status.probe?.toolCount ?? 0) > 0, detail: `${status.probe?.toolCount ?? 0} 个已验证工具`, nextAction: '检查工具开关和共享内容' },
+      { name: 'workspace_list', ok: status.probe?.workspaceList === true, detail: status.probe?.workspaceList ? '已通过' : '未验证或读取工具未开放', nextAction: '启用共享读取并检查项目可用性' })
+    return { status, checks: checks.map((check) => ({ ...check, level: check.level ?? (check.ok ? 'pass' : 'fail'), nextAction: check.ok ? '无需操作' : check.nextAction })) }
   }
-  async detect(): Promise<{ ok: boolean; detail: string }> {
+
+  async detect(request?: { provider: McpTransportKind; executablePath?: string }): Promise<import('@proma/shared').ProviderBinaryDetection> {
+    if (request) {
+      if (!REMOTE_PROVIDERS.some((provider) => provider.kind === request.provider)) throw new Error('REMOTE_PROVIDER_INVALID')
+      return detectProviderBinary(request.provider, request.executablePath)
+    }
     const config = this.getConfig(); const kind = config.provider
-    if (!kind || kind === 'external-https') return { ok: true, detail: '不需要本地程序' }
-    if (kind === 'openai-secure') { const found = await mcpTunnelService.detectClient(); return { ok: found.installed && found.executableKind === 'full-cli', detail: found.version ?? found.errorMessage ?? '未检测到 full CLI' } }
-    try {
-      const executable = config.providers[kind]?.executablePath ?? (kind.startsWith('cloudflare') ? 'cloudflared' : kind === 'ngrok' ? 'ngrok' : 'tailscale')
-      const output = await runProviderCommand(executable, [kind.startsWith('cloudflare') ? '--version' : 'version'])
-      if (kind === 'ngrok') {
-        const settings = config.providers.ngrok ?? {}
-        const env = { ...process.env }; delete env.NGROK_AUTHTOKEN
-        if (settings.authSource === 'proma-secret') {
-          const token = this.secrets().read('ngrok'); if (!token) return { ok: false, detail: 'NGROK_AUTH_MISSING：请保存 ngrok Authtoken' }
-          env.NGROK_AUTHTOKEN = token
-        }
-        await runProviderCommand(executable, ['config', 'check', ...(settings.configSource === 'custom' && settings.configPath ? ['--config', settings.configPath] : [])], env)
-        return { ok: true, detail: output.trim().split('\n')[0] + '；配置有效，云端认证将在启动后验证。' }
-      }
-      if (kind === 'tailscale-funnel') { const state = JSON.parse(await runProviderCommand(executable, ['status','--json'])); if (state.BackendState !== 'Running') return { ok: false, detail: '设备尚未登录 Tailscale' } }
-      return { ok: true, detail: output.trim().split('\n')[0]!.slice(0, 120) }
-    } catch { return { ok: false, detail: '未找到程序或程序无法运行，请选择官方程序后重试' } }
+    if (!kind || kind === 'external-https' || kind === 'ngrok' && config.providers.ngrok?.mode === 'external-existing') return { ok: true, detail: '不需要本地程序' }
+    if (kind === 'openai-secure') {
+      const found = await mcpTunnelService.detectClient()
+      return { ok: found.installed && found.executableKind === 'full-cli', version: found.version, detail: found.version ?? found.errorMessage ?? '未检测到 full CLI' }
+    }
+    return detectProviderBinary(kind, config.providers[kind]?.executablePath)
   }
   saveToken(value: unknown, requestedProvider?: McpTransportKind): void {
     if (typeof value !== 'string' || !value.trim() || value.length > 8192 || value.includes('\0')) throw new Error('TOKEN_INVALID')

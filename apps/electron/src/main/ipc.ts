@@ -1967,15 +1967,24 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(MCP_TRANSPORT_IPC.START, () => mcpTransportService.start())
   ipcMain.handle(MCP_TRANSPORT_IPC.STOP, () => mcpTransportService.stop())
   ipcMain.handle(MCP_TRANSPORT_IPC.DIAGNOSE, () => mcpTransportService.diagnose())
-  ipcMain.handle(MCP_TRANSPORT_IPC.DETECT, () => mcpTransportService.detect())
+  ipcMain.handle(MCP_TRANSPORT_IPC.DETECT, (_, request?: { provider: import('@proma/shared').McpTransportKind; executablePath?: string }) => mcpTransportService.detect(request))
   ipcMain.handle(MCP_TRANSPORT_IPC.CONFIRM_SCHEMA, () => mcpTransportService.confirmToolSchema())
   ipcMain.handle(MCP_TRANSPORT_IPC.CLEAR_LOGS, () => mcpTransportService.clearLogs())
   ipcMain.handle(MCP_TRANSPORT_IPC.COPY, () => mcpTransportService.copyConnectorUrl())
   ipcMain.handle(MCP_TRANSPORT_IPC.SAVE_TOKEN, (_, token: unknown, provider?: import('@proma/shared').McpTransportKind) => mcpTransportService.saveToken(token, provider))
   ipcMain.handle(MCP_TRANSPORT_IPC.ROTATE_SECRET, () => mcpTransportService.rotateSecret())
-  ipcMain.handle(MCP_TRANSPORT_IPC.PICK, async () => {
-    const result = await dialog.showOpenDialog({ title: '选择连接程序', properties: ['openFile'] })
-    return result.canceled ? null : result.filePaths[0] ?? null
+  ipcMain.handle(MCP_TRANSPORT_IPC.PICK, async (_, kind: import('@proma/shared').McpRemoteProviderKind) => {
+    const { REMOTE_PROVIDERS } = await import('@proma/shared')
+    const descriptor = REMOTE_PROVIDERS.find((provider) => provider.kind === kind)?.controls.binary
+    if (!descriptor) throw new Error('PROVIDER_BINARY_NOT_REQUIRED')
+    const result = await dialog.showOpenDialog({ title: `选择 ${descriptor.displayName} 程序`, properties: ['openFile'],
+      ...(process.platform === 'win32' ? { filters: [{ name: descriptor.expectedFiles.join(' / '), extensions: ['exe'] }] } : {}) })
+    const path = result.canceled ? undefined : result.filePaths[0]
+    if (!path) return null
+    const { detectProviderBinary } = await import('./lib/mcp-transport/provider-binary')
+    const detected = await detectProviderBinary(kind, path)
+    if (!detected.ok) throw new Error(detected.detail)
+    return path
   })
   ipcMain.handle(MCP_TRANSPORT_IPC.PICK_CONFIG, async () => {
     const result = await dialog.showOpenDialog({ title: '选择 ngrok 配置', properties: ['openFile'], filters: [{ name: 'ngrok YAML', extensions: ['yml', 'yaml'] }] })

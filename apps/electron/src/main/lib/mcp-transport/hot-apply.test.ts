@@ -10,6 +10,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { CloudflareProvider } from './cloudflare-provider'
 import { NetworkProvider } from './network-provider'
 import { NgrokProvider } from './ngrok-provider'
+import { ngrokProfilePath, prepareNgrokProfile } from './ngrok-profile'
 import { PublicMcpIngress } from './public-ingress'
 import { probePublicMcp } from './public-probe'
 import { normalizeRemoteConfig, remoteApplyImpact } from './config'
@@ -22,6 +23,7 @@ for (const kind of ['cloudflare-named', 'ngrok'] as const) it(`Given ${kind} Rea
   writeFileSync(join(one, 'README.md'), 'one'); writeFileSync(join(two, 'README.md'), 'two')
   let config = normalizeSharing({ enabled: true, roots: [], tools: { fileRead: true, git: true, search: true } })
   let entries = [{ id: 'one', name: 'one', rootPath: one, enabled: true, permissions: { read: true, write: false, shell: false } }]
+  for (const id of ['three', 'four']) { const root = join(base, id); mkdirSync(root); entries.push({ ...entries[0]!, id, name: id, rootPath: root }) }
   const catalog = createPrimitiveCatalog(() => config, () => entries, (id) => { const entry = entries.find((e) => e.id === id)!; return { entry, context: { workspaceId: id, rootPath: entry.rootPath } } })
   const secret = randomBytes(32).toString('base64url')
   const ingress = new PublicMcpIngress(catalog, () => secret, 'probe')
@@ -29,19 +31,22 @@ for (const kind of ['cloudflare-named', 'ngrok'] as const) it(`Given ${kind} Rea
   const remote = normalizeRemoteConfig({ version: 2, enabled: true, provider: 'cloudflare-named', providers: { 'cloudflare-named': { hostname: 'https://stable.example.com' } } })
   let spawns = 0; let kills = 0; let failProbe = false
   const child = Object.assign(new EventEmitter(), { pid: 77, stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, kill: () => { kills++; return true } }) as unknown as ChildProcess
-  const provider = kind === 'ngrok' ? new NgrokProvider({ hostname: 'https://stable.example.com' }, ingress, () => secret, () => 'fixture-token', 'probe', () => undefined, {
-    command: async () => 'ngrok 3.x --url --config', spawn: () => { spawns++; return child },
-    probe: async (_url, marker) => { if (failProbe) throw new Error('offline'); return probePublicMcp(local + '/mcp/' + secret, marker) },
+  const provider = kind === 'ngrok' ? new NgrokProvider({ mode: 'proma-managed', domainConfirmed: true, hostname: 'https://stable.example.com' }, ingress, () => secret, () => 'fixture-token', 'probe', () => undefined, {
+    prepareProfile: () => prepareNgrokProfile(base), profilePath: () => ngrokProfilePath(base),
+    command: async () => 'ngrok 3.39.9 --url --config', spawn: () => { spawns++; return child },
+    probe: async (_url, marker) => { if (failProbe || spawns === 0) throw new Error('offline'); return probePublicMcp(local + '/mcp/' + secret, marker) },
   }) : new CloudflareProvider('cloudflare-named', remote, ingress, () => secret, () => 'fixture-token', 'probe', {
     version: async () => 'cloudflared test', spawn: () => { spawns++; return child },
-    probe: async (_url, marker) => { if (failProbe) throw new Error('offline'); return probePublicMcp(local + '/mcp/' + secret, marker) },
+    probe: async (_url, marker) => { if (failProbe || spawns === 0) throw new Error('offline'); return probePublicMcp(local + '/mcp/' + secret, marker) },
   })
   const client = new Client({ name: 'hot-test', version: '1' }, { versionNegotiation: { mode: 'auto' } })
   try {
     const ready = await provider.start()
     await client.connect(new StreamableHTTPClientTransport(new URL(local + '/mcp/' + secret)))
     const fp = toolFingerprint(catalog)
+    expect(entries).toHaveLength(3)
     entries.push({ ...entries[0]!, id: 'two', name: 'two', rootPath: two })
+    expect(entries).toHaveLength(4)
     expect(JSON.stringify(await client.callTool({ name: 'workspace_list', arguments: {} }))).toContain('two')
     expect((await client.callTool({ name: 'read_file', arguments: { workspace_id: 'two', path: 'README.md' } })).isError).toBe(false)
     expect(toolFingerprint(catalog)).toBe(fp)

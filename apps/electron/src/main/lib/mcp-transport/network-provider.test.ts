@@ -12,10 +12,11 @@ it('Given ngrok 稳定域名与Token When 启动/诊断 Then Token仅进env且�
   let killed = 0; let failing = false
   const calls: Array<{ args: string[]; env?: NodeJS.ProcessEnv }> = []
   const child = Object.assign(new EventEmitter(), { pid: 100, stdout: new PassThrough(), stderr: new PassThrough(), kill: () => { killed++; return true } }) as unknown as ChildProcess
-  const provider = new NgrokProvider({ hostname: 'https://assigned.ngrok-free.app', authSource: 'proma-secret' }, ingress, () => 's'.repeat(43), () => 'PRIVATE_NGROK_TOKEN', 'probe', () => undefined, {
-    command: async (_exe, args) => args.includes('--help') ? '--url --config --log' : 'ngrok version fixture',
+  const provider = new NgrokProvider({ domainConfirmed: true, hostname: 'https://assigned.ngrok-free.app', authSource: 'proma-secret' }, ingress, () => 's'.repeat(43), () => 'PRIVATE_NGROK_TOKEN', 'probe', () => undefined, {
+    prepareProfile: () => 'fixture.yml', profilePath: () => 'fixture.yml',
+    command: async (_exe, args) => args.includes('--help') ? '--url --config --log' : 'ngrok version 3.39.9',
     spawn: (_exe, args, options) => { calls.push({ args, env: options.env }); return child },
-    probe: async () => { if (failing) throw new Error('offline'); return { modern: true, toolCount: 7, workspaceList: true } },
+    probe: async () => { if (failing || calls.length === 0) throw new Error('offline'); return { modern: true, toolCount: 7, workspaceList: true } },
   })
   try {
     const ready = await provider.start(); expect(ready.phase).toBe('ready'); expect(ready.pid).toBe(100)

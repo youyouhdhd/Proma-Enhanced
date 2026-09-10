@@ -1,5 +1,5 @@
-import type { McpRemoteProviderKind, RemoteProviderCapabilities, ProviderGuideStep } from '../types/mcp-transport'
-export interface ProviderDefinition { kind: McpRemoteProviderKind; name: string; use: 'stable' | 'test' | 'external' | 'experimental'; capabilities: RemoteProviderCapabilities; priceUrl: string; steps: ProviderGuideStep[]; controls: { binary: boolean; auth: 'none' | 'secret' | 'system-or-secret'; hostname: 'none' | 'fixed' | 'auto-or-fixed' } }
+import type { McpRemoteProviderKind, RemoteProviderCapabilities, ProviderGuideStep, ProviderBinaryDescriptor } from '../types/mcp-transport'
+export interface ProviderDefinition { kind: McpRemoteProviderKind; name: string; use: 'stable' | 'test' | 'external' | 'experimental'; capabilities: RemoteProviderCapabilities; priceUrl: string; steps: ProviderGuideStep[]; controls: { binary?: ProviderBinaryDescriptor; auth: 'none' | 'secret' | 'system-or-secret'; hostname: 'none' | 'fixed' | 'auto-or-fixed' } }
 const cap = (stableUrl: boolean, requiresAccount: boolean, requiresDomain: boolean, verification: RemoteProviderCapabilities['verification'], managedProcess = true): RemoteProviderCapabilities => ({ stableUrl, requiresAccount, requiresDomain, verification, managedProcess, freeTier: 'plan-dependent', supportsExternalManagement: !managedProcess, experimental: verification === 'experimental' })
 const definitions: Omit<ProviderDefinition, 'controls'>[] = [
   { kind: 'cloudflare-quick', name: 'Cloudflare Quick', use: 'test', capabilities: { ...cap(false, false, false, 'verified'), freeTier: 'yes' }, priceUrl: 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/', steps: [
@@ -19,8 +19,8 @@ const definitions: Omit<ProviderDefinition, 'controls'>[] = [
   ] },
   { kind: 'ngrok', name: 'ngrok', use: 'stable', capabilities: cap(true, true, false, 'not-tested'), priceUrl: 'https://ngrok.com/docs/pricing-limits/free-plan-limits', steps: [
     { id: 'account', title: '准备 ngrok 账号与程序', description: '免费档可用于轻量使用，有流量和请求额度；可使用账号分配的固定开发域名。', action: { kind: 'open-url', url: 'https://dashboard.ngrok.com/signup' } },
-    { id: 'token', title: '复用系统 ngrok 配置', description: '默认使用 ngrok config add-authtoken 配置的认证；也可选择由 PROMA 加密管理 Token。配置检查通过不代表云端认证成功，启动后继续验证。', action: { kind: 'open-url', url: 'https://dashboard.ngrok.com/get-started/your-authtoken' } },
-    { id: 'domain', title: '填写 Assigned Development Domain', description: '使用账号中分配的固定 HTTPS 域名，不购买域名也可测试。未完成真实 ChatGPT Gate 前不标记已验证推荐。', action: { kind: 'start' } },
+    { id: 'token', title: '准备独立 Credential', description: '推荐 PROMA 独立配置与加密 Credential。新 Token 不会自动创建新的公网 Domain；云端认证在启动后验证。', action: { kind: 'open-url', url: 'https://dashboard.ngrok.com/get-started/your-authtoken' } },
+    { id: 'domain', title: '填写 PROMA 专用 Domain', description: '使用可供 PROMA 独占的固定 HTTPS 地址，账号额度以官方页面为准。未完成真实 ChatGPT Gate 前不标记已验证推荐。', action: { kind: 'start' } },
   ] },
   { kind: 'external-https', name: 'External HTTPS', use: 'external', capabilities: cap(true, false, false, 'not-tested', false), priceUrl: 'https://modelcontextprotocol.io/docs/develop/connect-remote-servers', steps: [
     { id: 'origin', title: '填写已有 HTTPS 地址', description: '费用取决于你使用的服务。Proma 不启动 Tunnel 进程；请将公网 origin 反向代理到下面的 localhost 地址。' },
@@ -31,7 +31,13 @@ const definitions: Omit<ProviderDefinition, 'controls'>[] = [
   ] },
 ]
 export const REMOTE_PROVIDERS: ProviderDefinition[] = definitions.map((provider) => ({ ...provider, controls: {
-  binary: provider.capabilities.managedProcess,
+  binary: provider.capabilities.managedProcess ? {
+    displayName: provider.kind.startsWith('cloudflare') ? 'cloudflared' : provider.kind === 'ngrok' ? 'ngrok' : provider.kind === 'tailscale-funnel' ? 'Tailscale CLI' : '完整 tunnel-client',
+    command: provider.kind.startsWith('cloudflare') ? 'cloudflared' : provider.kind === 'ngrok' ? 'ngrok' : provider.kind === 'tailscale-funnel' ? 'tailscale' : 'tunnel-client',
+    expectedFiles: provider.kind.startsWith('cloudflare') ? ['cloudflared.exe', 'cloudflared'] : provider.kind === 'ngrok' ? ['ngrok.exe', 'ngrok'] : provider.kind === 'tailscale-funnel' ? ['tailscale.exe', 'tailscale'] : ['tunnel-client.exe', 'tunnel-client'],
+    required: true, allowPath: true, allowCustomPath: true,
+    downloadUrl: provider.kind.startsWith('cloudflare') ? 'https://github.com/cloudflare/cloudflared/releases' : provider.kind === 'ngrok' ? 'https://ngrok.com/download' : provider.kind === 'tailscale-funnel' ? 'https://tailscale.com/download' : undefined,
+  } : undefined,
   auth: provider.kind === 'ngrok' ? 'system-or-secret' : ['cloudflare-named', 'openai-secure'].includes(provider.kind) ? 'secret' : 'none',
   hostname: provider.kind === 'ngrok' ? 'auto-or-fixed' : ['cloudflare-named', 'external-https'].includes(provider.kind) ? 'fixed' : 'none',
 } }))

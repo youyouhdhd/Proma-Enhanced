@@ -25,7 +25,7 @@ export function normalizeSharing(value: unknown): McpSharingConfig {
   const port = raw.localEndpoint?.port ?? 'auto'
   if (port !== 'auto' && (!Number.isInteger(port) || port < 1024 || port > 65535)) throw new Error('LOCAL_PORT_INVALID')
   const mode = (value: unknown) => value === 'direct' || value === 'approval' ? value : 'disabled'
-  const limit = (value: unknown, fallback: number, max: number) => typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= max ? value : fallback
+  const limit = (value: unknown, fallback: number, max: number, min = 1) => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max ? value : fallback
   const oldDelegation = raw.delegation
   const sourceTargets = Array.isArray(oldDelegation?.targets) ? oldDelegation.targets : oldDelegation?.channelId && oldDelegation?.modelId
     ? [{ id: 'target_' + createHash('sha256').update(oldDelegation.channelId + '\0' + oldDelegation.modelId).digest('hex').slice(0, 16), channelId: oldDelegation.channelId, modelId: oldDelegation.modelId, enabled: true, priority: 0 }] : []
@@ -41,5 +41,5 @@ export function normalizeSharing(value: unknown): McpSharingConfig {
     tools: normalizePromaMcpServerConfig({ tools: raw.tools }).tools,
     policy: { read: raw.policy?.read === 'disabled' ? 'disabled' : 'direct', write: raw.version === 2 ? mode(raw.policy?.write) : 'disabled', execute: raw.version === 2 ? mode(raw.policy?.execute) : 'disabled' },
     limits: { writeConcurrent: limit(raw.limits?.writeConcurrent, 2, 8), writeCallsPerMinute: limit(raw.limits?.writeCallsPerMinute, 60, 600), shellCallsPerMinute: limit(raw.limits?.shellCallsPerMinute, 10, 60) },
-    delegation: { enabled: oldDelegation?.enabled === true, targets, strategy: oldDelegation?.strategy === 'manual' || oldDelegation?.strategy === 'round-robin' ? oldDelegation.strategy : 'fallback', maxConcurrent: limit(oldDelegation?.maxConcurrent, 1, 4), maxQueued: limit(oldDelegation?.maxQueued, 3, 20) } }
+    delegation: { enabled: oldDelegation?.enabled === true, targets, strategy: oldDelegation?.strategy === 'manual' || oldDelegation?.strategy === 'round-robin' ? oldDelegation.strategy : 'fallback', maxConcurrent: limit(oldDelegation?.maxConcurrent, 1, 4), maxQueued: limit(oldDelegation?.maxQueued, 3, 20, 0) } }
 }

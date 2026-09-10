@@ -3,6 +3,7 @@ import type { Channel, McpDelegationConfig, McpAgentTarget } from '@proma/shared
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SettingHelp } from './SettingHelp'
+import { SettingField } from './SettingField'
 
 interface Props { value: McpDelegationConfig; channels: Array<Pick<Channel, 'id' | 'name' | 'models'>>; onChange(value: McpDelegationConfig): void }
 export function McpAgentTargetsCard({ value, channels, onChange }: Props): React.ReactElement {
@@ -23,7 +24,7 @@ export function McpAgentTargetsCard({ value, channels, onChange }: Props): React
         const selected = value.targets.find((candidate) => candidate.channelId === channel.id && candidate.modelId === model.id && candidate.enabled)
         return <label key={model.id} className="block text-sm"><input type="checkbox" checked={Boolean(selected)} onChange={(event) => select([target], event.target.checked)} /> {model.name ?? model.id}{selected && value.strategy === 'manual' && <code className="ml-2 break-all text-xs">{selected.id}</code>}</label>
       })}</fieldset>)}
-      <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">并发任务<SettingHelp title="Agent 并发">默认 1，最多 4。提高并发可能同时消耗多个模型额度，仅影响分析队列，不重连网络。</SettingHelp><Input type="number" min={1} max={4} value={value.maxConcurrent} onChange={(event) => onChange({ ...value, maxConcurrent: Number(event.target.value) })} /></label><label className="text-sm">等待队列<Input type="number" min={1} max={20} value={value.maxQueued} onChange={(event) => onChange({ ...value, maxQueued: Number(event.target.value) })} /></label></div>
+      <div className="grid gap-3 sm:grid-cols-2"><SettingField label="最大并发 Agent 任务" helpTopic="agent-max-concurrent"><Input type="number" min={1} max={4} value={value.maxConcurrent} onChange={(event) => onChange({ ...value, maxConcurrent: Number(event.target.value) })} /></SettingField><SettingField label="最大等待 Agent 任务" helpTopic="agent-max-queued"><Input type="number" min={0} max={20} value={value.maxQueued} onChange={(event) => onChange({ ...value, maxQueued: Number(event.target.value) })} /></SettingField></div>
       <p className="text-xs text-muted-foreground">已选 {value.targets.filter((target) => target.enabled).length} 个目标。保存时检查授权，至少一个可用目标即可；其余不可用目标不阻塞 Fallback。</p>
     </>}
   </section>

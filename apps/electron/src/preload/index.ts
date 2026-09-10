@@ -415,7 +415,7 @@ export interface ElectronAPI {
   validateMcpAgentTargets: (value: import('@proma/shared').McpSharingConfig) => Promise<Array<{ id: string; ready: boolean; detail: string }>>
   linkMcpShareProject: (rootId: string, workspaceId: string) => Promise<import('@proma/shared').McpSharingConfig>
   cancelMcpTask: (id: string) => Promise<void>
-  detectMcpProvider: () => Promise<{ ok: boolean; detail: string }>
+  detectMcpProvider: (request?: { provider: import('@proma/shared').McpTransportKind; executablePath?: string }) => Promise<import('@proma/shared').ProviderBinaryDetection>
   confirmMcpToolSchema: () => Promise<void>
   onMcpSharingChanged: (callback: () => void) => () => void
   onMcpRemoteConfigChanged: (callback: () => void) => () => void
@@ -1499,7 +1499,7 @@ export interface ElectronAPI {
  * 实现 ElectronAPI 接口
  */
 const electronAPI: ElectronAPI = {
-  bridgeVersion: 12,
+  bridgeVersion: 13,
 
   // 运行时
   getRuntimeStatus: () => {
@@ -1796,7 +1796,7 @@ const electronAPI: ElectronAPI = {
   validateMcpAgentTargets: (value) => ipcRenderer.invoke(MCP_SHARING_IPC.VALIDATE_TARGETS, value),
   linkMcpShareProject: (rootId, workspaceId) => ipcRenderer.invoke(MCP_SHARING_IPC.LINK_PROJECT, rootId, workspaceId),
   cancelMcpTask: (id) => ipcRenderer.invoke(MCP_SHARING_IPC.CANCEL_TASK, id),
-  detectMcpProvider: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.DETECT),
+  detectMcpProvider: (request) => ipcRenderer.invoke(MCP_TRANSPORT_IPC.DETECT, request),
   confirmMcpToolSchema: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.CONFIRM_SCHEMA),
   onMcpSharingChanged: (callback) => { const listener = () => callback(); ipcRenderer.on(MCP_SHARING_IPC.CHANGED, listener); return () => { ipcRenderer.removeListener(MCP_SHARING_IPC.CHANGED, listener) } },
   onMcpRemoteConfigChanged: (callback) => { const listener = () => callback(); ipcRenderer.on(MCP_TRANSPORT_IPC.CONFIG_CHANGED, listener); return () => { ipcRenderer.removeListener(MCP_TRANSPORT_IPC.CONFIG_CHANGED, listener) } },

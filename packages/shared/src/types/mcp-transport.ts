@@ -7,11 +7,30 @@ export interface ProviderLogEntry {
   level: 'debug' | 'info' | 'warn' | 'error'; text: string
 }
 export interface RemoteProviderSettings {
+  mode?: 'proma-managed' | 'system' | 'external-existing'
+  credentialMode?: 'proma-secret' | 'system-config'
+  domainConfirmed?: boolean
   executablePath?: string; hostname?: string; controlPlaneProxy?: string; tunnelId?: string
   authSource?: 'system-config' | 'proma-secret'
   configSource?: 'default' | 'custom'; configPath?: string
   endpointMode?: 'fixed-domain' | 'auto-domain'
   webInspector?: 'default' | 'disabled'
+}
+export interface ProviderBinaryDescriptor {
+  displayName: string; expectedFiles: string[]; command: string; required: boolean
+  downloadUrl?: string; installGuideUrl?: string; allowPath: boolean; allowCustomPath: boolean
+}
+export interface ProviderBinaryDetection {
+  ok: boolean; source?: 'path' | 'custom'; resolvedPath?: string; version?: string; detail: string
+}
+export interface NgrokConfigDetection {
+  valid: boolean; source: 'system' | 'proma-managed' | 'custom'; path?: string; authConfigured?: boolean
+}
+export interface NgrokRuntimeState {
+  mode: NonNullable<RemoteProviderSettings['mode']>
+  ownership: 'proma-process' | 'existing-proma-endpoint' | 'external-conflict' | 'none'
+  inspectorUrl?: string; config?: NgrokConfigDetection
+  credentialSource?: 'proma-secret' | 'system-config' | 'external'
 }
 export interface PromaRemoteAccessConfig {
   version: 3
@@ -40,10 +59,12 @@ export interface McpTransportStatus {
   urlChanged?: boolean
   stableUrl?: boolean
   pid?: number
+  binary?: ProviderBinaryDetection
+  ngrok?: NgrokRuntimeState
   logs?: ProviderLogEntry[]
   requests?: Array<{ at: number; method: string; rpcMethod?: string; status: number; path: '/mcp/<redacted>'; probe: boolean; toolName?: string; workspaceId?: string; durationMs?: number; resultType?: 'response' | 'error' }>
 }
-export interface McpTransportDiagnostic { status: McpTransportStatus; checks: Array<{ name: string; ok: boolean; detail: string }> }
+export interface McpTransportDiagnostic { status: McpTransportStatus; checks: Array<{ name: string; ok: boolean; detail: string; level?: 'pass' | 'warn' | 'fail'; nextAction?: string }> }
 export const MCP_TRANSPORT_IPC = {
   GET: 'mcp-transport:get', SAVE: 'mcp-transport:save', START: 'mcp-transport:start', STOP: 'mcp-transport:stop',
   DIAGNOSE: 'mcp-transport:diagnose', PICK: 'mcp-transport:pick', COPY: 'mcp-transport:copy',
