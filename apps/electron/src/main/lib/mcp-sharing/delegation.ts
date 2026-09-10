@@ -9,15 +9,23 @@ import { AnalysisTaskQueue } from './task-queue'
 import { join } from 'node:path'
 import { getConfigDir } from '../config-paths'
 import { readJsonFileSafe, writeJsonFileAtomic } from '../safe-file'
-import type { McpRemoteTask } from '@proma/shared'
+import type { McpRemoteTask, McpAgentTarget } from '@proma/shared'
 import { authorizeAnalysisRoot } from './analysis-policy'
+import { TargetRouter } from './target-router'
 
 export async function validateDelegationModel(channelId?: string, modelId?: string): Promise<void> {
   const channel = channelId ? getChannelById(channelId) : undefined
   if (!channel?.enabled || !modelId || !channel.models.some((m) => m.id === modelId && m.enabled)) throw new Error('请先配置并选择可用的 Agent 渠道与模型')
   if (!await resolveChannelRuntimeApiKey(channel.id)) throw new Error('Agent 渠道尚未完成授权')
 }
+export async function validateDelegationTargets(targets: McpAgentTarget[]): Promise<Array<{ target: McpAgentTarget; ready: boolean; detail: string }>> {
+  return Promise.all(targets.filter((target) => target.enabled).map(async (target) => {
+    try { await validateDelegationModel(target.channelId, target.modelId); return { target, ready: true, detail: 'Ready' } }
+    catch { return { target, ready: false, detail: '渠道/模型不可用或尚未授权' } }
+  }))
+}
 export function createDelegationQueue(readTools: (workspaceId: string) => McpToolHandlers, allowedRoot: (id: string) => boolean, changed: () => void): AnalysisTaskQueue {
+  const router = new TargetRouter()
   const taskFile = join(getConfigDir(), 'mcp-analysis-tasks.json')
   const authorize = (id: string) => {
     const config = mcpSharingStore.get()
@@ -25,11 +33,14 @@ export function createDelegationQueue(readTools: (workspaceId: string) => McpToo
     if (mcpSharingStore.resolve(root).health.state !== 'available') throw new Error('TASK_ROOT_UNAVAILABLE')
     return { root, config, workspaceId: root.source.agentWorkspaceId }
   }
-  return new AnalysisTaskQueue({ run: async (id, instruction, signal, bindSession) => {
+  return new AnalysisTaskQueue({ run: async (id, instruction, signal, bindSession, targetId, audit) => {
     const { config, root, workspaceId } = authorize(id)
-    await validateDelegationModel(config.delegation.channelId, config.delegation.modelId)
     const boundPath = mcpSharingStore.resolve(root).entry!.rootPath
-    const session = createAgentSession('MCP 只读分析', config.delegation.channelId, workspaceId, config.delegation.modelId, 'project')
+    const validated = await validateDelegationTargets(config.delegation.targets)
+    return router.run(config.delegation, validated.filter((item) => item.ready).map((item) => item.target), targetId, signal, async (target) => {
+    const current = authorize(id)
+    if (signal.aborted || mcpSharingStore.resolve(current.root).entry?.rootPath !== boundPath) throw new Error('TASK_CANCELLED')
+    const session = createAgentSession('MCP 只读分析', target.channelId, workspaceId, target.modelId, 'project')
     bindSession(session.id)
     const tools = readTools(id)
     const analysisTools: ToolDefinition[] = tools.list().filter((t) => t.annotations.readOnlyHint).map((tool) => ({
@@ -47,11 +58,12 @@ export function createDelegationQueue(readTools: (workspaceId: string) => McpToo
       const stop = () => { try { stopRegisteredAgent(session.id) } catch { /* 尚未启动 */ } }
       signal.addEventListener('abort', stop, { once: true })
       if (signal.aborted) { signal.removeEventListener('abort', stop); reject(new Error('CANCELLED')); return }
-      void runRegisteredHeadlessAgent({ sessionId: session.id, workspaceId, channelId: config.delegation.channelId!, modelId: config.delegation.modelId,
+      void runRegisteredHeadlessAgent({ sessionId: session.id, workspaceId, channelId: target.channelId, modelId: target.modelId,
         userMessage: instruction, triggeredBy: 'external', permissionModeOverride: 'plan' }, {
         source: 'delegation', onTitleUpdated: () => undefined, onError: () => { failed = true },
         onComplete: (messages, outcome) => { signal.removeEventListener('abort', stop); if (signal.aborted || outcome?.stoppedByUser) reject(new Error('TASK_CANCELLED')); else if (failed) reject(new Error('ANALYSIS_FAILED')); else resolve(messages?.filter((m) => m.role === 'assistant').at(-1)?.content ?? '分析完成，没有文本结果。') },
       }, { analysisTools }).catch(() => { signal.removeEventListener('abort', stop); reject(new Error('ANALYSIS_FAILED')) })
     })
-  } }, authorize, (tasks) => { writeJsonFileAtomic(taskFile, tasks); changed() }, readJsonFileSafe<McpRemoteTask[]>(taskFile) ?? [])
+    }, audit)
+  } }, authorize, (tasks) => { writeJsonFileAtomic(taskFile, tasks); changed() }, readJsonFileSafe<McpRemoteTask[]>(taskFile) ?? [], () => mcpSharingStore.get().delegation)
 }

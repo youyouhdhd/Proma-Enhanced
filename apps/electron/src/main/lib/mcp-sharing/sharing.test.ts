@@ -69,6 +69,6 @@ describe('V11 Sharing / 低成本脚本回归', () => {
     expect(() => authorizeAnalysisRoot(config, ['extra'], 'extra')).toThrow('PROMA 项目')
     expect(() => authorizeAnalysisRoot(config, [], 'agent')).toThrow('TASK_SCOPE_DENIED')
     expect(authorizeAnalysisRoot(config, ['agent'], 'agent').source.agentWorkspaceId).toBe('bound-agent-id')
-    expect(() => authorizeAnalysisRoot({ ...config, delegation: { enabled: false } }, ['agent'], 'agent')).toThrow()
+    expect(() => authorizeAnalysisRoot({ ...config, delegation: { ...config.delegation, enabled: false } }, ['agent'], 'agent')).toThrow()
   })
 })

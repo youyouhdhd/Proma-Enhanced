@@ -402,12 +402,17 @@ export interface ElectronAPI {
   stopMcpTransport: () => Promise<import('@proma/shared').McpTransportStatus>
   diagnoseMcpTransport: () => Promise<import('@proma/shared').McpTransportDiagnostic>
   pickCloudflared: () => Promise<string | null>
+  pickMcpProviderExecutable: (provider: import('@proma/shared').McpRemoteProviderKind) => Promise<string | null>
+  pickMcpProviderConfig: () => Promise<string | null>
+  clearMcpProviderLogs: () => Promise<void>
   copyMcpConnectorUrl: () => Promise<void>
   saveCloudflareToken: (token: string, provider?: import('@proma/shared').McpTransportKind) => Promise<void>
   rotateMcpConnectorSecret: () => Promise<void>
   getMcpSharing: () => Promise<{ config: import('@proma/shared').McpSharingConfig; health: import('@proma/shared').McpShareRootHealth[]; tasks: import('@proma/shared').McpRemoteTask[] }>
   saveMcpSharing: (config: import('@proma/shared').McpSharingConfig) => Promise<import('@proma/shared').McpSharingConfig>
   pickMcpShareFolder: () => Promise<import('@proma/shared').McpShareRoot | null>
+  pickMcpShareFolders: () => Promise<import('@proma/shared').McpShareRoot[]>
+  validateMcpAgentTargets: (value: import('@proma/shared').McpSharingConfig) => Promise<Array<{ id: string; ready: boolean; detail: string }>>
   linkMcpShareProject: (rootId: string, workspaceId: string) => Promise<import('@proma/shared').McpSharingConfig>
   cancelMcpTask: (id: string) => Promise<void>
   detectMcpProvider: () => Promise<{ ok: boolean; detail: string }>
@@ -1494,7 +1499,7 @@ export interface ElectronAPI {
  * 实现 ElectronAPI 接口
  */
 const electronAPI: ElectronAPI = {
-  bridgeVersion: 11,
+  bridgeVersion: 12,
 
   // 运行时
   getRuntimeStatus: () => {
@@ -1778,12 +1783,17 @@ const electronAPI: ElectronAPI = {
   stopMcpTransport: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.STOP),
   diagnoseMcpTransport: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.DIAGNOSE),
   pickCloudflared: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.PICK),
+  pickMcpProviderExecutable: (provider) => ipcRenderer.invoke(MCP_TRANSPORT_IPC.PICK, provider),
+  pickMcpProviderConfig: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.PICK_CONFIG),
+  clearMcpProviderLogs: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.CLEAR_LOGS),
   copyMcpConnectorUrl: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.COPY),
   saveCloudflareToken: (token, provider) => ipcRenderer.invoke(MCP_TRANSPORT_IPC.SAVE_TOKEN, token, provider),
   rotateMcpConnectorSecret: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.ROTATE_SECRET),
   getMcpSharing: () => ipcRenderer.invoke(MCP_SHARING_IPC.GET),
   saveMcpSharing: (config) => ipcRenderer.invoke(MCP_SHARING_IPC.SAVE, config),
   pickMcpShareFolder: () => ipcRenderer.invoke(MCP_SHARING_IPC.PICK_FOLDER),
+  pickMcpShareFolders: () => ipcRenderer.invoke(MCP_SHARING_IPC.PICK_FOLDERS),
+  validateMcpAgentTargets: (value) => ipcRenderer.invoke(MCP_SHARING_IPC.VALIDATE_TARGETS, value),
   linkMcpShareProject: (rootId, workspaceId) => ipcRenderer.invoke(MCP_SHARING_IPC.LINK_PROJECT, rootId, workspaceId),
   cancelMcpTask: (id) => ipcRenderer.invoke(MCP_SHARING_IPC.CANCEL_TASK, id),
   detectMcpProvider: () => ipcRenderer.invoke(MCP_TRANSPORT_IPC.DETECT),

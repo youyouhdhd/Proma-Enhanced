@@ -1,6 +1,6 @@
 {
   "name": "@proma/electron",
-  "version": "1.9.1",
+  "version": "1.10.0",
   "description": "Proma，为专业用户设计的 Agent",
   "main": "dist/main.cjs",
   "author": {
@@ -57,7 +57,7 @@
     "dist:fast": "bun run scripts/dist.ts --current-arch --dmg",
     "dist:debug": "bun run scripts/dist.ts --current-arch --verbose",
     "test:mcp-public-ingress": "bun test src/main/lib/mcp-transport/public-ingress.test.ts",
-    "test:mcp-transport": "bun test src/main/lib/mcp-transport/transport.test.ts src/main/lib/mcp-transport/hot-apply.test.ts src/main/lib/mcp-transport/network-provider.test.ts",
+    "test:mcp-transport": "bun test src/main/lib/mcp-transport",
     "test:mcp-sharing": "bun test src/main/lib/mcp-sharing src/main/lib/local-tools/git-read-only.test.ts",
     "test:mcp-ui": "bun run scripts/test-mcp-sharing-ui.ts"
   },

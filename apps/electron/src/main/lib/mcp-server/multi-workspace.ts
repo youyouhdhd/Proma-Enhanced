@@ -43,6 +43,21 @@ export const workspaceListTool: Pick<LocalToolDefinition, 'name' | 'description'
   risk: 'read',
 }
 
+export const workspaceOpenTool: Pick<LocalToolDefinition, 'name' | 'description' | 'inputSchema' | 'risk'> = {
+  name: 'workspace_open',
+  description: '按 ID 或名称解析当前已授权项目，返回稳定 workspace_id。不会设置全局当前项目；后续调用显式传 workspace_id。',
+  inputSchema: { type: 'object', properties: { workspace_id: { type: 'string' }, name: { type: 'string' } }, additionalProperties: false },
+  risk: 'read',
+}
+
+export function handleWorkspaceOpen(args: Record<string, unknown>, entries: WorkspaceDirectoryEntry[]): LocalToolResult {
+  const enabled = entries.filter((entry) => entry.enabled && entry.permissions.read)
+  const candidates = typeof args.name === 'string' ? enabled.filter((entry) => entry.name === args.name) : enabled
+  const resolved = resolveTargetWorkspace(args.workspace_id, candidates)
+  if ('error' in resolved) return { ok: false, error: resolved.error }
+  return toolOk({ workspace_id: resolved.entry.id, name: resolved.entry.name, permissions: resolved.entry.permissions })
+}
+
 export const readManyTool: Pick<LocalToolDefinition, 'name' | 'description' | 'inputSchema' | 'risk'> = {
   name: 'read_many',
   description: '一次读取多个（跨仓库）文件，减少往返。单次最多 20 个文件、总量 400KB。',
@@ -97,7 +112,7 @@ export const CROSS_SEARCH_SCHEMA_PROPERTIES = {
 export function resolveTargetWorkspace(
   rawWorkspaceId: unknown,
   entries: WorkspaceDirectoryEntry[],
-): { entry: WorkspaceDirectoryEntry } | { error: { code: 'INVALID_INPUT'; message: string } } {
+): { entry: WorkspaceDirectoryEntry } | { error: NonNullable<LocalToolResult['error']> } {
   const enabled = entries.filter((e) => e.enabled)
   if (typeof rawWorkspaceId === 'string' && rawWorkspaceId.trim()) {
     const id = rawWorkspaceId.trim()
@@ -113,7 +128,8 @@ export function resolveTargetWorkspace(
   }
   return {
     error: {
-      code: 'INVALID_INPUT',
+      code: 'WORKSPACE_REQUIRED',
+      choices: enabled.map((entry) => ({ workspace_id: entry.id, name: entry.name })),
       message: '存在多个授权项目，必须显式指定 workspace_id。可用: ' + enabled.map((e) => e.id + '(' + e.name + ')').join(', ') + '。可先调用 workspace_list。',
     },
   }
@@ -132,7 +148,7 @@ export function assertToolPermission(risk: 'read' | 'write' | 'execute', permiss
 /** workspace_list：包含每个项目的 git 状态（规范 §33 的返回形状） */
 export async function handleWorkspaceList(entries: WorkspaceDirectoryEntry[]): Promise<LocalToolResult> {
   const workspaces = entries.map((entry) => {
-    const isGit = existsSync(entry.rootPath + '/.git') || existsSync(entry.rootPath + '\.git')
+    const isGit = entry.permissions.read && existsSync(entry.rootPath + '/.git')
     let branch: string | undefined
     if (isGit) {
       const res = runReadOnlyGit(entry.rootPath, ['symbolic-ref', '--short', 'HEAD'])

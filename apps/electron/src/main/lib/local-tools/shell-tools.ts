@@ -7,7 +7,8 @@
  * - 支持超时与 abort；stdout/stderr 截断上限。
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import { guardWorkspacePath } from './security'
 import { toolOk, toolError } from './types'
 import type { LocalToolDefinition } from './types'
@@ -31,6 +32,7 @@ export const shellExecuteTool: LocalToolDefinition = {
   },
   risk: 'execute',
   async execute(input, context) {
+    if (context.signal?.aborted) return toolError('ABORTED', '执行已被中止')
     const command = typeof input.command === 'string' ? input.command.trim() : ''
     if (!command) return toolError('INVALID_INPUT', 'command 不能为空')
     const rawCwd = typeof input.cwd === 'string' && input.cwd.trim() ? input.cwd : '.'
@@ -43,13 +45,19 @@ export const shellExecuteTool: LocalToolDefinition = {
         cwd: guarded.path,
         shell: true,
         windowsHide: true,
+        detached: process.platform !== 'win32',
         env: { ...process.env },
       })
       let stdout = ''; let stderr = ''; let timedOut = false; let settled = false
-      const kill = (): void => { timedOut = true; try { child.kill('SIGKILL') } catch { /* 已退出 */ } }
+      const terminate = (): void => {
+        if (process.platform === 'win32' && child.pid) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => undefined)
+        else { try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL') } catch { /* 已退出 */ } }
+      }
+      const kill = (): void => { timedOut = true; terminate() }
       const timer = setTimeout(kill, timeoutMs)
-      const onAbort = (): void => { timedOut = false; try { child.kill('SIGKILL') } catch { /* 已退出 */ } }
+      const onAbort = (): void => { timedOut = false; terminate() }
       context.signal?.addEventListener('abort', onAbort, { once: true })
+      if (context.signal?.aborted) onAbort()
       const finish = (exitCode: number | null): void => {
         if (settled) return
         settled = true
@@ -66,9 +74,10 @@ export const shellExecuteTool: LocalToolDefinition = {
           `exitCode=${exitCode ?? 'signal'}${timedOut ? ' (timed out)' : ''}\n${out}${err ? '\n[stderr]\n' + err : ''}`.slice(0, MAX_OUTPUT_CHARS),
         ))
       }
-      child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
-      child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
-      child.on('error', (err) => { settled = true; clearTimeout(timer); resolve(toolError('EXECUTION_ERROR', err.message)) })
+      const outDecoder = new StringDecoder('utf8'); const errDecoder = new StringDecoder('utf8')
+      child.stdout?.on('data', (chunk: Buffer) => { stdout = (stdout + outDecoder.write(chunk)).slice(0, MAX_OUTPUT_CHARS) })
+      child.stderr?.on('data', (chunk: Buffer) => { stderr = (stderr + errDecoder.write(chunk)).slice(0, MAX_OUTPUT_CHARS) })
+      child.on('error', (err) => { settled = true; clearTimeout(timer); context.signal?.removeEventListener('abort', onAbort); resolve(toolError('EXECUTION_ERROR', err.message)) })
       child.on('close', (code) => finish(code))
     })
   },

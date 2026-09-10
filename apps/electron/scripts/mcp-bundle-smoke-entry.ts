@@ -21,7 +21,7 @@ async function verifyPublicIngress(): Promise<void> {
   try {
     const local = await ingress.start(0)
     const result = await probePublicMcp(local + '/mcp/' + secret, 'cjs-probe')
-    if (!result.modern || result.toolCount !== 10 || JSON.stringify(ingress.getRequests()).includes(secret)) throw new Error('Public MCP 验证失败')
+    if (!result.modern || result.toolCount !== tools.list().length || JSON.stringify(ingress.getRequests()).includes(secret)) throw new Error('Public MCP 验证失败')
   } finally { await ingress.stop(); rmSync(rootPath, { recursive: true, force: true }) }
 }
 

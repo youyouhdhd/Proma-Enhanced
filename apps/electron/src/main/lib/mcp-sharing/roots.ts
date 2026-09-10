@@ -7,12 +7,20 @@ import type { WorkspaceDirectoryEntry } from '../mcp-server/multi-workspace'
 export interface ShareWorkspace { id: string; name: string; projectRootPath?: string; slug: string }
 export interface RootResolver { workspace(id: string): ShareWorkspace | null | undefined; managedPath(slug: string): string }
 const key = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path
+export function shareFolderIdentity(path: string): string {
+  const real = realpathSync.native(path)
+  if (process.platform === 'win32') {
+    const stat = statSync(real, { bigint: true })
+    if (stat.ino !== 0n) return `win32:${stat.dev}:${stat.ino}`
+  }
+  return key(real)
+}
 export function validateShareFolder(path: string): string {
   if (!isAbsolute(path)) throw new Error('SHARE_FOLDER_MISSING')
   const absolute = resolve(path)
   if (key(absolute) === key(parse(absolute).root) || key(absolute) === key(resolve(homedir()))) throw new Error('SHARE_FOLDER_TOO_BROAD')
   if (!existsSync(path)) throw new Error('SHARE_FOLDER_MISSING')
-  const real = realpathSync(path)
+  const real = realpathSync.native(path)
   if (!statSync(real).isDirectory()) throw new Error('SHARE_FOLDER_NOT_DIRECTORY')
   const forbidden = process.platform === 'win32'
     ? [process.env.SystemRoot ?? 'C:\\Windows', process.env.ProgramFiles ?? 'C:\\Program Files', process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)']

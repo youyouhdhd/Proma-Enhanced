@@ -9,7 +9,7 @@
 
 import type { PromaMcpServerConfig } from '@proma/shared'
 import type { LocalToolRegistry, LocalToolDefinition, LocalToolRisk } from '../local-tools'
-import { workspaceListTool, readManyTool, gitStatusBatchTool, CROSS_SEARCH_SCHEMA_PROPERTIES } from './multi-workspace'
+import { workspaceListTool, workspaceOpenTool, readManyTool, gitStatusBatchTool, CROSS_SEARCH_SCHEMA_PROPERTIES } from './multi-workspace'
 
 /** tools/list 的单个工具视图（含注解与跨仓库 schema 增强） */
 export interface McpToolView {
@@ -68,6 +68,7 @@ export function buildMcpToolViews(config: PromaMcpServerConfig, registry: LocalT
   }
   // 多工作区固定工具（schema 稳定，仓库只是运行时参数——规范 §43）
   views.push({ name: workspaceListTool.name, description: workspaceListTool.description, inputSchema: workspaceListTool.inputSchema, annotations: toolAnnotations(workspaceListTool.risk) })
+  views.push({ name: workspaceOpenTool.name, description: workspaceOpenTool.description, inputSchema: workspaceOpenTool.inputSchema, annotations: toolAnnotations(workspaceOpenTool.risk) })
   if (config.tools.fileRead) {
     views.push({ name: readManyTool.name, description: readManyTool.description, inputSchema: readManyTool.inputSchema, annotations: toolAnnotations(readManyTool.risk) })
   }

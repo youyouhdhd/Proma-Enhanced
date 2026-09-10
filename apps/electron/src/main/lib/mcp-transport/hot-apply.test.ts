@@ -9,13 +9,14 @@ import { randomBytes } from 'node:crypto'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import { CloudflareProvider } from './cloudflare-provider'
 import { NetworkProvider } from './network-provider'
+import { NgrokProvider } from './ngrok-provider'
 import { PublicMcpIngress } from './public-ingress'
 import { probePublicMcp } from './public-probe'
 import { normalizeRemoteConfig, remoteApplyImpact } from './config'
 import { normalizeSharing } from '../mcp-sharing/config'
 import { createPrimitiveCatalog, toolFingerprint } from '../mcp-sharing/catalog'
 
-it('Given 稳定 Provider Ready When Root/读取权限/Git 设置热更新 Then PID与URL不变且撤销实时生效', async () => {
+for (const kind of ['cloudflare-named', 'ngrok'] as const) it(`Given ${kind} Ready When Root/读取权限/Git 设置热更新 Then PID与URL不变且撤销实时生效`, async () => {
   const base = mkdtempSync(join(tmpdir(), 'proma-hot-'))
   const one = join(base, 'one'); const two = join(base, 'two'); mkdirSync(one); mkdirSync(two)
   writeFileSync(join(one, 'README.md'), 'one'); writeFileSync(join(two, 'README.md'), 'two')
@@ -28,7 +29,10 @@ it('Given 稳定 Provider Ready When Root/读取权限/Git 设置热更新 Then 
   const remote = normalizeRemoteConfig({ version: 2, enabled: true, provider: 'cloudflare-named', providers: { 'cloudflare-named': { hostname: 'https://stable.example.com' } } })
   let spawns = 0; let kills = 0; let failProbe = false
   const child = Object.assign(new EventEmitter(), { pid: 77, stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, kill: () => { kills++; return true } }) as unknown as ChildProcess
-  const provider = new CloudflareProvider('cloudflare-named', remote, ingress, () => secret, () => 'fixture-token', 'probe', {
+  const provider = kind === 'ngrok' ? new NgrokProvider({ hostname: 'https://stable.example.com' }, ingress, () => secret, () => 'fixture-token', 'probe', () => undefined, {
+    command: async () => 'ngrok 3.x --url --config', spawn: () => { spawns++; return child },
+    probe: async (_url, marker) => { if (failProbe) throw new Error('offline'); return probePublicMcp(local + '/mcp/' + secret, marker) },
+  }) : new CloudflareProvider('cloudflare-named', remote, ingress, () => secret, () => 'fixture-token', 'probe', {
     version: async () => 'cloudflared test', spawn: () => { spawns++; return child },
     probe: async (_url, marker) => { if (failProbe) throw new Error('offline'); return probePublicMcp(local + '/mcp/' + secret, marker) },
   })
@@ -38,6 +42,7 @@ it('Given 稳定 Provider Ready When Root/读取权限/Git 设置热更新 Then 
     await client.connect(new StreamableHTTPClientTransport(new URL(local + '/mcp/' + secret)))
     const fp = toolFingerprint(catalog)
     entries.push({ ...entries[0]!, id: 'two', name: 'two', rootPath: two })
+    expect(JSON.stringify(await client.callTool({ name: 'workspace_list', arguments: {} }))).toContain('two')
     expect((await client.callTool({ name: 'read_file', arguments: { workspace_id: 'two', path: 'README.md' } })).isError).toBe(false)
     expect(toolFingerprint(catalog)).toBe(fp)
     entries = entries.filter((e) => e.id !== 'one')
@@ -63,7 +68,7 @@ it('Given 稳定 Provider Ready When Root/读取权限/Git 设置热更新 Then 
 
 it('Given V10 scope 与新配置 When 迁移/比较 Then 不扩大旧范围并分类重启影响', () => {
   const migrated = normalizeRemoteConfig({ mode: 'cloudflare-quick', publicIngress: { workspaceIds: ['one'], port: 8787 } })
-  expect(migrated.version).toBe(2); expect(migrated.publicIngress.scopeMode).toBe('custom'); expect(migrated.publicIngress.workspaceIds).toEqual(['one'])
+  expect(migrated.version).toBe(3); expect(migrated.publicIngress.scopeMode).toBe('custom'); expect(migrated.publicIngress.workspaceIds).toEqual(['one'])
   expect(normalizeRemoteConfig({ mode: 'local', autoStart: true }).enabled).toBe(false)
   const current = normalizeRemoteConfig({ version: 2 })
   expect(current.provider).toBeUndefined(); expect(current.publicIngress.scopeMode).toBe('inherit')

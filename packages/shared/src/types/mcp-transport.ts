@@ -1,9 +1,20 @@
 export type McpRemoteProviderKind = 'cloudflare-quick' | 'cloudflare-named' | 'tailscale-funnel' | 'ngrok' | 'external-https' | 'openai-secure'
 export type McpTransportKind = McpRemoteProviderKind
 export type ApplyImpact = 'none' | 'hot' | 'ingress-restart' | 'provider-restart' | 'connector-url-changed'
-export interface RemoteProviderSettings { executablePath?: string; hostname?: string; controlPlaneProxy?: string; tunnelId?: string }
+export interface ProviderLogEntry {
+  at: number; provider: McpRemoteProviderKind
+  source: 'system' | 'command' | 'stdout' | 'stderr' | 'probe' | 'mcp'
+  level: 'debug' | 'info' | 'warn' | 'error'; text: string
+}
+export interface RemoteProviderSettings {
+  executablePath?: string; hostname?: string; controlPlaneProxy?: string; tunnelId?: string
+  authSource?: 'system-config' | 'proma-secret'
+  configSource?: 'default' | 'custom'; configPath?: string
+  endpointMode?: 'fixed-domain' | 'auto-domain'
+  webInspector?: 'default' | 'disabled'
+}
 export interface PromaRemoteAccessConfig {
-  version: 2
+  version: 3
   enabled: boolean
   provider?: McpRemoteProviderKind
   autoStart: boolean
@@ -29,7 +40,8 @@ export interface McpTransportStatus {
   urlChanged?: boolean
   stableUrl?: boolean
   pid?: number
-  requests?: Array<{ at: number; method: string; rpcMethod?: string; status: number; path: '/mcp/<redacted>'; probe: boolean }>
+  logs?: ProviderLogEntry[]
+  requests?: Array<{ at: number; method: string; rpcMethod?: string; status: number; path: '/mcp/<redacted>'; probe: boolean; toolName?: string; workspaceId?: string; durationMs?: number; resultType?: 'response' | 'error' }>
 }
 export interface McpTransportDiagnostic { status: McpTransportStatus; checks: Array<{ name: string; ok: boolean; detail: string }> }
 export const MCP_TRANSPORT_IPC = {
@@ -38,6 +50,7 @@ export const MCP_TRANSPORT_IPC = {
   SAVE_TOKEN: 'mcp-transport:save-token', ROTATE_SECRET: 'mcp-transport:rotate-secret',
   CONFIG_CHANGED: 'mcp-remote-config:changed', STATUS_CHANGED: 'mcp-remote-status:changed', DETECT: 'mcp-transport:detect',
   CONFIRM_SCHEMA: 'mcp-transport:confirm-schema',
+  PICK_CONFIG: 'mcp-transport:pick-config', CLEAR_LOGS: 'mcp-transport:clear-logs',
 } as const
 export interface RemoteProviderCapabilities {
   stableUrl: boolean; requiresAccount: boolean; requiresDomain: boolean; freeTier: 'yes' | 'plan-dependent'

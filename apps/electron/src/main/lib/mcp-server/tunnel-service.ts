@@ -28,6 +28,7 @@ import { analyzeProtocol, isConnectorRpc, rpcSucceeded } from './protocol/protoc
 import type { TunnelRuntimeConfig } from './tunnel-client-types'
 import { readRemoteAccessConfig } from '../mcp-transport/config'
 import { writeJsonFileAtomic } from '../safe-file'
+import { ProviderLogBuffer } from '../mcp-transport/provider-log-buffer'
 
 const READY_POLL_INTERVAL_MS = 1_000
 const READY_TIMEOUT_MS = 60_000
@@ -57,6 +58,9 @@ class McpTunnelService {
   private readonly adapter = openAiTunnelClientAdapter
   private readonly runner = new TunnelProcessRunner()
   private remoteTarget?: { endpoint: string; token: string }
+  private providerLogs?: ProviderLogBuffer
+  getProviderLogs() { return this.providerLogs?.snapshot() ?? [] }
+  clearProviderLogs(): void { this.providerLogs?.clear() }
   setRemoteTarget(target?: { endpoint: string; token: string }): void { this.remoteTarget = target }
 
   onStateChanged(listener: (state: PromaMcpTunnelState) => void): () => void {
@@ -295,6 +299,9 @@ class McpTunnelService {
         shell: false,
       })
       this.child = child
+      this.providerLogs = new ProviderLogBuffer('openai-secure', () => [runtimeKey, localToken ?? ''], () => this.emit())
+      this.providerLogs.add('command', [detection.path, ...args].join(' '))
+      this.providerLogs.attach(child.stdout, 'stdout'); this.providerLogs.attach(child.stderr, 'stderr')
       this.state = { ...this.state, pid: child.pid }
       const stderrTail: string[] = []
       const collect = (decoder: StringDecoder) => (chunk: Buffer) => {

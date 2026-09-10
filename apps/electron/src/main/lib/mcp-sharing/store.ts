@@ -8,7 +8,7 @@ import { getAgentWorkspace, getProjectFilesPath } from '../agent-workspace-manag
 import { normalizePromaMcpServerConfig } from '../mcp-server/config'
 import { writeJsonFileAtomic } from '../safe-file'
 import { normalizeSharing, migrateSharing } from './config'
-import { validateShareFolder, resolveShareRoot } from './roots'
+import { validateShareFolder, resolveShareRoot, shareFolderIdentity } from './roots'
 
 class McpSharingStore {
   private readonly approvedFolders = new Set<string>()
@@ -28,8 +28,18 @@ class McpSharingStore {
   prepareFolder(path: string): McpShareRoot {
     const real = validateShareFolder(path)
     this.approvedFolders.add(real)
-    return { id: 'ws_folder_' + createHash('sha256').update(process.platform === 'win32' ? real.toLowerCase() : real).digest('hex').slice(0, 16),
+    const identity = shareFolderIdentity(real)
+    const existing = this.get().roots.find((root) => {
+      if (root.source.type !== 'local-folder') return false
+      try { return shareFolderIdentity(root.source.path) === identity } catch { return false }
+    })
+    return { id: existing?.id ?? 'ws_folder_' + createHash('sha256').update(identity).digest('hex').slice(0, 16),
       name: basename(real), source: { type: 'local-folder', path: real }, enabled: true, permissions: { read: true, write: false, shell: false }, createdAt: Date.now() }
+  }
+  prepareFolders(paths: string[]): McpShareRoot[] {
+    if (!Array.isArray(paths) || paths.length > 500 || paths.some((path) => typeof path !== 'string')) throw new Error('SHARING_FOLDERS_INVALID')
+    const prepared = paths.map((path) => this.prepareFolder(path))
+    return [...new Map(prepared.map((root) => [root.id, root])).values()]
   }
   save(value: unknown): McpSharingConfig {
     const next = normalizeSharing(value)

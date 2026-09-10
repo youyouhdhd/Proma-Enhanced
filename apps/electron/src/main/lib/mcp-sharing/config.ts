@@ -1,11 +1,12 @@
 import type { McpSharingConfig, McpShareRoot, PromaMcpServerConfig } from '@proma/shared'
 import { normalizePromaMcpServerConfig } from '../mcp-server/config'
+import { createHash } from 'node:crypto'
 
 export function migrateSharing(old: PromaMcpServerConfig): McpSharingConfig {
-  return { version: 1, enabled: old.enabled || old.workspaces.some((w) => w.enabled),
+  return { version: 2, enabled: old.enabled || old.workspaces.some((w) => w.enabled),
     roots: old.workspaces.map((w) => ({ id: w.id, name: w.name ?? w.agentWorkspaceId, source: { type: 'agent-workspace', agentWorkspaceId: w.agentWorkspaceId }, enabled: w.enabled, permissions: w.permissions, createdAt: w.createdAt })),
     localEndpoint: { enabled: old.enabled, port: old.port, auth: old.auth.type === 'none' ? 'none' : 'managed-bearer' },
-    tools: old.tools, policy: { read: 'enabled', write: 'disabled', execute: 'disabled' }, delegation: { enabled: false } }
+    tools: old.tools, policy: { read: 'direct', write: 'disabled', execute: 'disabled' }, limits: { writeConcurrent: 2, writeCallsPerMinute: 60, shellCallsPerMinute: 10 }, delegation: { enabled: false, strategy: 'fallback', targets: [], maxConcurrent: 1, maxQueued: 3 } }
 }
 export function normalizeSharing(value: unknown): McpSharingConfig {
   if (!value || typeof value !== 'object') return migrateSharing(normalizePromaMcpServerConfig(undefined))
@@ -23,9 +24,22 @@ export function normalizeSharing(value: unknown): McpSharingConfig {
   })
   const port = raw.localEndpoint?.port ?? 'auto'
   if (port !== 'auto' && (!Number.isInteger(port) || port < 1024 || port > 65535)) throw new Error('LOCAL_PORT_INVALID')
-  return { version: 1, enabled: raw.enabled === true, roots,
+  const mode = (value: unknown) => value === 'direct' || value === 'approval' ? value : 'disabled'
+  const limit = (value: unknown, fallback: number, max: number) => typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= max ? value : fallback
+  const oldDelegation = raw.delegation
+  const sourceTargets = Array.isArray(oldDelegation?.targets) ? oldDelegation.targets : oldDelegation?.channelId && oldDelegation?.modelId
+    ? [{ id: 'target_' + createHash('sha256').update(oldDelegation.channelId + '\0' + oldDelegation.modelId).digest('hex').slice(0, 16), channelId: oldDelegation.channelId, modelId: oldDelegation.modelId, enabled: true, priority: 0 }] : []
+  if (sourceTargets.length > 100) throw new Error('AGENT_TARGETS_INVALID')
+  const targetIds = new Set<string>()
+  const targets = sourceTargets.map((target, index) => {
+    if (!target || typeof target.id !== 'string' || !/^[\w-]{1,100}$/.test(target.id) || targetIds.has(target.id) || typeof target.channelId !== 'string' || typeof target.modelId !== 'string') throw new Error('AGENT_TARGET_INVALID')
+    targetIds.add(target.id)
+    return { id: target.id, channelId: target.channelId, modelId: target.modelId, enabled: target.enabled === true, priority: Number.isFinite(target.priority) ? target.priority : index }
+  })
+  return { version: 2, enabled: raw.enabled === true, roots,
     localEndpoint: { enabled: raw.localEndpoint?.enabled === true, port, auth: raw.localEndpoint?.auth === 'none' ? 'none' : 'managed-bearer' },
     tools: normalizePromaMcpServerConfig({ tools: raw.tools }).tools,
-    policy: { read: raw.policy?.read === 'disabled' ? 'disabled' : 'enabled', write: 'disabled', execute: 'disabled' },
-    delegation: { enabled: raw.delegation?.enabled === true, ...(typeof raw.delegation?.channelId === 'string' ? { channelId: raw.delegation.channelId } : {}), ...(typeof raw.delegation?.modelId === 'string' ? { modelId: raw.delegation.modelId } : {}) } }
+    policy: { read: raw.policy?.read === 'disabled' ? 'disabled' : 'direct', write: raw.version === 2 ? mode(raw.policy?.write) : 'disabled', execute: raw.version === 2 ? mode(raw.policy?.execute) : 'disabled' },
+    limits: { writeConcurrent: limit(raw.limits?.writeConcurrent, 2, 8), writeCallsPerMinute: limit(raw.limits?.writeCallsPerMinute, 60, 600), shellCallsPerMinute: limit(raw.limits?.shellCallsPerMinute, 10, 60) },
+    delegation: { enabled: oldDelegation?.enabled === true, targets, strategy: oldDelegation?.strategy === 'manual' || oldDelegation?.strategy === 'round-robin' ? oldDelegation.strategy : 'fallback', maxConcurrent: limit(oldDelegation?.maxConcurrent, 1, 4), maxQueued: limit(oldDelegation?.maxQueued, 3, 20) } }
 }

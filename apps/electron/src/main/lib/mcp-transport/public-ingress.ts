@@ -4,7 +4,6 @@ import type { McpTransportStatus } from '@proma/shared'
 import { createModernServer, type McpToolHandlers } from '../mcp-server/protocol/modern-server'
 import { readRequestBody, isMcpJsonRpc } from '../mcp-server/protocol/request-classifier'
 import { usesLegacyProtocol } from '../mcp-server/protocol/protocol-router'
-import { DELEGATION_TOOL_NAMES } from '../mcp-sharing/catalog'
 
 export class PublicMcpIngress {
   private server: ReturnType<typeof createServer> | undefined
@@ -33,14 +32,14 @@ export class PublicMcpIngress {
     if (!/^[A-Za-z0-9_-]{43,}$/.test(secret)) throw new Error('PUBLIC_CONNECTOR_SECRET_MISSING')
     this.traces.length = 0
     this.engine = createModernServer({
-      list: () => this.tools.list().filter((t) => t.annotations.readOnlyHint || DELEGATION_TOOL_NAMES.has(t.name)),
-      call: (name, args) => this.tools.list().some((t) => t.name === name && (t.annotations.readOnlyHint || DELEGATION_TOOL_NAMES.has(t.name)))
-        ? this.tools.call(name, args) : Promise.resolve({ content: [{ type: 'text', text: 'Public ingress is read-only' }], isError: true }),
+      list: () => this.tools.list(),
+      call: (name, args) => this.tools.list().some((t) => t.name === name)
+        ? this.tools.call(name, args) : Promise.resolve({ content: [{ type: 'text', text: '工具已关闭或不在授权目录中' }], isError: true }),
     })
     const server = createServer((req, res) => {
       const trace: NonNullable<McpTransportStatus['requests']>[number] = { at: Date.now(), method: req.method ?? '', status: 0, path: '/mcp/<redacted>', probe: req.headers['x-proma-probe'] === this.probeMarker }
       let recorded = false
-      const finish = () => { if (!recorded) { recorded = true; trace.status = res.statusCode; this.traces.push(trace); if (this.traces.length > 100) this.traces.shift() } }
+      const finish = () => { if (!recorded) { recorded = true; trace.status = res.statusCode; trace.durationMs = Date.now() - trace.at; trace.resultType = res.statusCode >= 400 ? 'error' : 'response'; this.traces.push(trace); if (this.traces.length > 100) this.traces.shift() } }
       res.once('finish', finish); res.once('close', finish)
       void (async () => {
         if (!this.validHost(req)) { res.writeHead(403).end(); return }
@@ -61,6 +60,12 @@ export class PublicMcpIngress {
         }
         // 固定方法名白名单，恶意 RPC method 也不能把 secret 放进 trace。
         trace.rpcMethod = ['server/discover', 'tools/list', 'tools/call', 'ping'].includes(body.value.method) ? body.value.method : 'other'
+        if (trace.rpcMethod === 'tools/call') {
+          const params = (body.value as { params?: { name?: unknown; arguments?: { workspace_id?: unknown } } }).params
+          if (typeof params?.name === 'string' && this.tools.list().some((tool) => tool.name === params.name)) trace.toolName = params.name
+          const workspaceId = params?.arguments?.workspace_id
+          if (typeof workspaceId === 'string' && /^[\w-]{1,100}$/.test(workspaceId) && !workspaceId.includes(currentSecret)) trace.workspaceId = workspaceId
+        }
         await this.engine!.handle(req, res, body.value)
       })().catch(() => { if (!res.headersSent) res.writeHead(500); res.end('MCP request failed') })
     })

@@ -9,6 +9,8 @@ import { createConfiguredTools } from '../mcp-server/configured-tools'
 import { createDefaultLocalToolRegistry } from '../local-tools/registry'
 import { normalizePromaMcpServerConfig } from '../mcp-server/config'
 import { probePublicMcp } from './public-probe'
+import { createPrimitiveCatalog } from '../mcp-sharing/catalog'
+import { normalizeSharing } from '../mcp-sharing/config'
 
 it('Given 内部 full workspace When 通过 Public Ingress Then 只读、Secret、Legacy 与路径边界均强制执行', async () => {
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'proma-public-test-'))
@@ -19,8 +21,8 @@ it('Given 内部 full workspace When 通过 Public Ingress Then 只读、Secret�
   let secret = randomBytes(32).toString('base64url')
   let enabled = true
   const entry = { id: 'ws_public', rootPath, name: 'fixture', enabled: true, permissions: { read: true, write: true, shell: true } }
-  const tools = createConfiguredTools({ config: () => normalizePromaMcpServerConfig({ accessMode: 'full', tools: { fileRead: true, fileWrite: true, shell: true, search: true, git: true } }),
-    entries: () => enabled ? [entry] : [], registry: createDefaultLocalToolRegistry(), resolve: () => ({ entry, context: { rootPath, workspaceId: entry.id } }) })
+  const tools = createPrimitiveCatalog(() => normalizeSharing({ enabled: true, roots: [], tools: { fileRead: true, fileWrite: true, shell: true, search: true, git: true } }),
+    () => enabled ? [entry] : [], () => ({ entry, context: { rootPath, workspaceId: entry.id } }))
   const ingress = new PublicMcpIngress(tools, () => secret, 'probe-marker')
   const other = new PublicMcpIngress(tools, () => secret, 'probe-marker')
   const client = new Client({ name: 'public-fixture', version: '1' }, { versionNegotiation: { mode: 'auto' } })
@@ -36,7 +38,7 @@ it('Given 内部 full workspace When 通过 Public Ingress Then 只读、Secret�
     await client.connect(new StreamableHTTPClientTransport(new URL(endpoint)))
     expect(client.getProtocolEra()).toBe('modern')
     const listed = await client.listTools()
-    expect(listed.tools).toHaveLength(10)
+    expect(listed.tools).toHaveLength(11)
     expect(listed.tools.every((t) => t.annotations?.readOnlyHint === true)).toBe(true)
     for (const name of ['write_file', 'edit_file', 'shell_execute']) {
       expect(listed.tools.some((t) => t.name === name)).toBe(false)
@@ -48,7 +50,7 @@ it('Given 内部 full workspace When 通过 Public Ingress Then 只读、Secret�
     enabled = false
     expect((await client.callTool({ name: 'read_file', arguments: { path: 'README.md' } })).isError).toBe(true)
     enabled = true
-    expect((await probePublicMcp(endpoint, 'probe-marker')).toolCount).toBe(10)
+    expect((await probePublicMcp(endpoint, 'probe-marker')).toolCount).toBe(11)
     expect(ingress.getRequests().some((t) => t.probe)).toBe(true)
     expect(JSON.stringify(ingress.getRequests())).not.toContain(secret)
     secret = randomBytes(32).toString('base64url')

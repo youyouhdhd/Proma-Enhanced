@@ -1928,9 +1928,14 @@ export function registerIpcHandlers(): void {
   // Remote Transport：所有凭据留在主进程，复制接口不返回完整 URL。
   ipcMain.handle(MCP_SHARING_IPC.GET, () => ({ config: mcpSharingStore.get(), health: mcpSharingStore.health(), tasks: mcpTransportService.tasks() }))
   ipcMain.handle(MCP_SHARING_IPC.SAVE, (_, value: unknown) => mcpTransportService.saveSharing(value))
+  ipcMain.handle(MCP_SHARING_IPC.VALIDATE_TARGETS, (_, value: unknown) => mcpTransportService.validateTargets(value))
   ipcMain.handle(MCP_SHARING_IPC.PICK_FOLDER, async () => {
     const result = await dialog.showOpenDialog({ title: '选择明确授权的共享文件夹', properties: ['openDirectory'] })
     return result.canceled || !result.filePaths[0] ? null : mcpSharingStore.prepareFolder(result.filePaths[0])
+  })
+  ipcMain.handle(MCP_SHARING_IPC.PICK_FOLDERS, async () => {
+    const result = await dialog.showOpenDialog({ title: '批量选择明确授权的共享文件夹', properties: ['openDirectory', 'multiSelections'] })
+    return result.canceled ? [] : mcpSharingStore.prepareFolders(result.filePaths)
   })
   ipcMain.handle(MCP_SHARING_IPC.LINK_PROJECT, (_, rootId: string, workspaceId: string) => {
     const config = mcpSharingStore.get()
@@ -1964,11 +1969,16 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(MCP_TRANSPORT_IPC.DIAGNOSE, () => mcpTransportService.diagnose())
   ipcMain.handle(MCP_TRANSPORT_IPC.DETECT, () => mcpTransportService.detect())
   ipcMain.handle(MCP_TRANSPORT_IPC.CONFIRM_SCHEMA, () => mcpTransportService.confirmToolSchema())
+  ipcMain.handle(MCP_TRANSPORT_IPC.CLEAR_LOGS, () => mcpTransportService.clearLogs())
   ipcMain.handle(MCP_TRANSPORT_IPC.COPY, () => mcpTransportService.copyConnectorUrl())
   ipcMain.handle(MCP_TRANSPORT_IPC.SAVE_TOKEN, (_, token: unknown, provider?: import('@proma/shared').McpTransportKind) => mcpTransportService.saveToken(token, provider))
   ipcMain.handle(MCP_TRANSPORT_IPC.ROTATE_SECRET, () => mcpTransportService.rotateSecret())
   ipcMain.handle(MCP_TRANSPORT_IPC.PICK, async () => {
     const result = await dialog.showOpenDialog({ title: '选择连接程序', properties: ['openFile'] })
+    return result.canceled ? null : result.filePaths[0] ?? null
+  })
+  ipcMain.handle(MCP_TRANSPORT_IPC.PICK_CONFIG, async () => {
+    const result = await dialog.showOpenDialog({ title: '选择 ngrok 配置', properties: ['openFile'], filters: [{ name: 'ngrok YAML', extensions: ['yml', 'yaml'] }] })
     return result.canceled ? null : result.filePaths[0] ?? null
   })
 

@@ -9,6 +9,7 @@ import type { McpTransportProvider } from './types'
 import type { PublicMcpIngress } from './public-ingress'
 import { publicOrigin } from './config'
 import { probePublicMcp } from './public-probe'
+import { ProviderLogBuffer } from './provider-log-buffer'
 
 export function parseQuickUrl(output: string): string | undefined { return output.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com(?![a-z0-9.-])/)?.[0] }
 export function cloudflareArgs(kind: 'cloudflare-quick' | 'cloudflare-named', localUrl: string, configFile?: string): string[] {
@@ -47,13 +48,16 @@ export class CloudflareProvider implements McpTransportProvider {
   private readonly deps: CloudflareDeps
   private baseUrl?: string
   private scratch?: string
+  private readonly logs: ProviderLogBuffer
   constructor(readonly kind: 'cloudflare-quick' | 'cloudflare-named', private readonly config: PromaRemoteAccessConfig,
     private readonly ingress: PublicMcpIngress, private readonly secret: () => string, private readonly token: () => string | undefined,
     private readonly marker: string, deps?: Partial<CloudflareDeps>) {
     this.status = { kind, phase: 'stopped' }; this.deps = { ...defaults, ...deps }
+    this.logs = new ProviderLogBuffer(kind, () => [this.secret(), this.token() ?? ''], () => this.deps.changed())
   }
   private executable(): string { return this.config.providers[this.kind]?.executablePath ?? 'cloudflared' }
-  getStatus(): McpTransportStatus { return { ...this.status, endpoint: this.status.endpoint ? { ...this.status.endpoint } : undefined, requests: this.ingress.getRequests() } }
+  clearLogs(): void { this.logs.clear() }
+  getStatus(): McpTransportStatus { return { ...this.status, endpoint: this.status.endpoint ? { ...this.status.endpoint } : undefined, requests: this.ingress.getRequests(), logs: this.logs.snapshot() } }
   async preflight(): Promise<McpTransportStatus> {
     const version = await this.deps.version(this.executable())
     if (this.kind === 'cloudflare-named') {
@@ -86,6 +90,8 @@ export class CloudflareProvider implements McpTransportProvider {
         env: { ...cloudflareEnv(this.kind === 'cloudflare-named' ? this.token() : undefined), HOME: this.scratch, USERPROFILE: this.scratch }, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
       })
       this.child = child; this.status.pid = child.pid
+      this.logs.add('system', `启动 cloudflared，PID ${child.pid ?? '未知'}`)
+      this.logs.attach(child.stdout, 'stdout'); this.logs.attach(child.stderr, 'stderr')
       const fail = () => {
         if (epoch !== this.epoch) return
         this.status = { ...this.status, phase: 'error', errorCode: 'CLOUDFLARED_LAUNCH_FAILED', errorMessage: 'cloudflared 已退出，请检查程序、网络或 Named 配置。', probe: undefined }

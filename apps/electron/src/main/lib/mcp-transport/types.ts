@@ -6,4 +6,5 @@ export interface McpTransportProvider {
   stop(): Promise<void>
   getStatus(): McpTransportStatus
   diagnose(): Promise<McpTransportDiagnostic>
+  clearLogs?(): void
 }

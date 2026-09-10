@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream'
 import type { ChildProcess } from 'node:child_process'
 import { PublicMcpIngress } from './public-ingress'
 import { NetworkProvider } from './network-provider'
+import { NgrokProvider } from './ngrok-provider'
 
 it('Given ngrok 稳定域名与Token When 启动/诊断 Then Token仅进env且诊断失败不杀进程', async () => {
   const ingress = new PublicMcpIngress({ list: () => [], call: async () => ({ content: [] }) }, () => 's'.repeat(43), 'probe')
@@ -11,7 +12,7 @@ it('Given ngrok 稳定域名与Token When 启动/诊断 Then Token仅进env且�
   let killed = 0; let failing = false
   const calls: Array<{ args: string[]; env?: NodeJS.ProcessEnv }> = []
   const child = Object.assign(new EventEmitter(), { pid: 100, stdout: new PassThrough(), stderr: new PassThrough(), kill: () => { killed++; return true } }) as unknown as ChildProcess
-  const provider = new NetworkProvider('ngrok', { hostname: 'https://assigned.ngrok-free.app' }, ingress, () => 's'.repeat(43), () => 'PRIVATE_NGROK_TOKEN', 'probe', () => undefined, {
+  const provider = new NgrokProvider({ hostname: 'https://assigned.ngrok-free.app', authSource: 'proma-secret' }, ingress, () => 's'.repeat(43), () => 'PRIVATE_NGROK_TOKEN', 'probe', () => undefined, {
     command: async (_exe, args) => args.includes('--help') ? '--url --config --log' : 'ngrok version fixture',
     spawn: (_exe, args, options) => { calls.push({ args, env: options.env }); return child },
     probe: async () => { if (failing) throw new Error('offline'); return { modern: true, toolCount: 7, workspaceList: true } },

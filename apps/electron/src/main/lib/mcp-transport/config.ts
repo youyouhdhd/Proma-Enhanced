@@ -12,9 +12,9 @@ export function publicOrigin(value: string): string {
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.search || url.hash || url.pathname !== '/' || !url.hostname.includes('.') || isIP(url.hostname.replace(/^\[|\]$/g, '')) || /(^localhost\.|\.(local|localhost)$)/.test(url.hostname)) throw new Error('PUBLIC_HOSTNAME_INVALID')
   return url.origin
 }
-export function normalizeRemoteConfig(value: unknown): PromaRemoteAccessConfig {
+export function normalizeRemoteConfig(value: unknown, hasNgrokSecret = false): PromaRemoteAccessConfig {
   const raw = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
-  if (raw.version !== 2) {
+  if (raw.version !== 2 && raw.version !== 3) {
     const old = raw as { mode?: string; autoStart?: boolean; publicIngress?: { port?: number; workspaceIds?: string[] }; cloudflare?: { customPath?: string; hostname?: string }; openai?: { controlPlaneProxy?: string } }
     const kind = REMOTE_KINDS.includes(old.mode as McpRemoteProviderKind) ? old.mode as McpRemoteProviderKind : undefined
     return normalizeRemoteConfig({ version: 2, enabled: Boolean(kind), provider: kind, autoStart: old.autoStart === true,
@@ -38,13 +38,23 @@ export function normalizeRemoteConfig(value: unknown): PromaRemoteAccessConfig {
       normalized.executablePath = item.executablePath
     }
     if (item.hostname) normalized.hostname = publicOrigin(item.hostname)
+    if (kind === 'ngrok') {
+      normalized.authSource = item.authSource === 'proma-secret' || raw.version === 2 && !item.authSource && hasNgrokSecret ? 'proma-secret' : 'system-config'
+      normalized.configSource = item.configSource === 'custom' ? 'custom' : 'default'
+      normalized.endpointMode = item.endpointMode === 'auto-domain' ? 'auto-domain' : 'fixed-domain'
+      normalized.webInspector = item.webInspector === 'disabled' ? 'disabled' : 'default'
+      if (item.configPath) {
+        if (typeof item.configPath !== 'string' || !isAbsolute(item.configPath) || item.configPath.includes('\0')) throw new Error('NGROK_CONFIG_INVALID')
+        normalized.configPath = item.configPath
+      }
+    }
     if (kind === 'openai-secure') {
       if (typeof item.tunnelId === 'string') normalized.tunnelId = item.tunnelId.trim()
       if (item.controlPlaneProxy) { const url = new URL(item.controlPlaneProxy); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('CONTROL_PLANE_PROXY_INVALID'); normalized.controlPlaneProxy = item.controlPlaneProxy }
     }
     providers[kind] = normalized
   }
-  return { version: 2, enabled: source.enabled === true, ...(source.provider ? { provider: source.provider } : {}), autoStart: source.autoStart === true,
+  return { version: 3, enabled: source.enabled === true, ...(source.provider ? { provider: source.provider } : {}), autoStart: source.autoStart === true,
     publicIngress: { port, scopeMode: source.publicIngress?.scopeMode === 'custom' ? 'custom' : 'inherit', workspaceIds: [...new Set(ids)] }, providers }
 }
 export function readRemoteAccessConfig(): PromaRemoteAccessConfig {
@@ -52,10 +62,10 @@ export function readRemoteAccessConfig(): PromaRemoteAccessConfig {
   if (existsSync(file)) {
     try {
       const raw = JSON.parse(readFileSync(file, 'utf8'))
-      const next = normalizeRemoteConfig(raw)
-      if (raw.version !== 2) {
+      const next = normalizeRemoteConfig(raw, existsSync(join(getConfigDir(), 'mcp-transport-ngrok')))
+      if (raw.version !== 3) {
         const old = getSettings().mcpTunnel
-        if (next.provider === 'openai-secure') next.providers['openai-secure'] = { ...next.providers['openai-secure'], tunnelId: old?.tunnelId, executablePath: old?.executablePath }
+        if (raw.version !== 2 && next.provider === 'openai-secure') next.providers['openai-secure'] = { ...next.providers['openai-secure'], tunnelId: old?.tunnelId, executablePath: old?.executablePath }
         writeJsonFileAtomic(file, next)
       }
       return next

@@ -1,7 +1,7 @@
 import type { McpRemoteProviderKind, RemoteProviderCapabilities, ProviderGuideStep } from '../types/mcp-transport'
-export interface ProviderDefinition { kind: McpRemoteProviderKind; name: string; use: 'stable' | 'test' | 'external' | 'experimental'; capabilities: RemoteProviderCapabilities; priceUrl: string; steps: ProviderGuideStep[] }
+export interface ProviderDefinition { kind: McpRemoteProviderKind; name: string; use: 'stable' | 'test' | 'external' | 'experimental'; capabilities: RemoteProviderCapabilities; priceUrl: string; steps: ProviderGuideStep[]; controls: { binary: boolean; auth: 'none' | 'secret' | 'system-or-secret'; hostname: 'none' | 'fixed' | 'auto-or-fixed' } }
 const cap = (stableUrl: boolean, requiresAccount: boolean, requiresDomain: boolean, verification: RemoteProviderCapabilities['verification'], managedProcess = true): RemoteProviderCapabilities => ({ stableUrl, requiresAccount, requiresDomain, verification, managedProcess, freeTier: 'plan-dependent', supportsExternalManagement: !managedProcess, experimental: verification === 'experimental' })
-export const REMOTE_PROVIDERS: ProviderDefinition[] = [
+const definitions: Omit<ProviderDefinition, 'controls'>[] = [
   { kind: 'cloudflare-quick', name: 'Cloudflare Quick', use: 'test', capabilities: { ...cap(false, false, false, 'verified'), freeTier: 'yes' }, priceUrl: 'https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/', steps: [
     { id: 'binary', title: '准备 cloudflared', description: '免费临时测试，通常无需账号或域名。选择已下载的官方程序或从 PATH 检测。', action: { kind: 'open-url', url: 'https://github.com/cloudflare/cloudflared/releases' } },
     { id: 'start', title: '生成临时地址', description: '启动并等待公网检查通过。每次重新连接地址可能变化，不适合长期自动恢复。', action: { kind: 'start' } },
@@ -19,7 +19,7 @@ export const REMOTE_PROVIDERS: ProviderDefinition[] = [
   ] },
   { kind: 'ngrok', name: 'ngrok', use: 'stable', capabilities: cap(true, true, false, 'not-tested'), priceUrl: 'https://ngrok.com/docs/pricing-limits/free-plan-limits', steps: [
     { id: 'account', title: '准备 ngrok 账号与程序', description: '免费档可用于轻量使用，有流量和请求额度；可使用账号分配的固定开发域名。', action: { kind: 'open-url', url: 'https://dashboard.ngrok.com/signup' } },
-    { id: 'token', title: '保存 Authtoken', description: 'Token 加密保存，启动时仅通过 NGROK_AUTHTOKEN 环境变量传递。', action: { kind: 'open-url', url: 'https://dashboard.ngrok.com/get-started/your-authtoken' } },
+    { id: 'token', title: '复用系统 ngrok 配置', description: '默认使用 ngrok config add-authtoken 配置的认证；也可选择由 PROMA 加密管理 Token。配置检查通过不代表云端认证成功，启动后继续验证。', action: { kind: 'open-url', url: 'https://dashboard.ngrok.com/get-started/your-authtoken' } },
     { id: 'domain', title: '填写 Assigned Development Domain', description: '使用账号中分配的固定 HTTPS 域名，不购买域名也可测试。未完成真实 ChatGPT Gate 前不标记已验证推荐。', action: { kind: 'start' } },
   ] },
   { kind: 'external-https', name: 'External HTTPS', use: 'external', capabilities: cap(true, false, false, 'not-tested', false), priceUrl: 'https://modelcontextprotocol.io/docs/develop/connect-remote-servers', steps: [
@@ -30,3 +30,8 @@ export const REMOTE_PROVIDERS: ProviderDefinition[] = [
     { id: 'setup', title: '实验性 OpenAI 接入', description: '选择 full tunnel-client，填写 Tunnel ID 并保存 Runtime Key。仍使用统一 Remote Ingress；Hosted 工具扫描存在上游风险。', action: { kind: 'detect-executable' } },
   ] },
 ]
+export const REMOTE_PROVIDERS: ProviderDefinition[] = definitions.map((provider) => ({ ...provider, controls: {
+  binary: provider.capabilities.managedProcess,
+  auth: provider.kind === 'ngrok' ? 'system-or-secret' : ['cloudflare-named', 'openai-secure'].includes(provider.kind) ? 'secret' : 'none',
+  hostname: provider.kind === 'ngrok' ? 'auto-or-fixed' : ['cloudflare-named', 'external-https'].includes(provider.kind) ? 'fixed' : 'none',
+} }))

@@ -3,6 +3,7 @@ import type { PromaMcpServerConfig } from '@proma/shared'
 import type { LocalToolRegistry, LocalToolResult } from '../local-tools'
 import { buildMcpToolViews } from './tool-adapter'
 import type { McpToolHandlers } from './protocol/modern-server'
+import { handleWorkspaceOpen } from './multi-workspace'
 import { resolveTargetWorkspace, assertToolPermission, handleWorkspaceList, handleReadMany, handleGitStatusBatch, handleCrossWorkspaceSearch, type WorkspaceDirectoryEntry, type WorkspaceContextResolver } from './multi-workspace'
 
 export interface ConfiguredToolsInput {
@@ -12,6 +13,7 @@ export interface ConfiguredToolsInput {
   registry: LocalToolRegistry
   allowedNames?: ReadonlySet<string>
   onCall?(name: string): void
+  signal?(): AbortSignal | undefined
 }
 
 export function createConfiguredTools(input: ConfiguredToolsInput): McpToolHandlers {
@@ -21,6 +23,7 @@ export function createConfiguredTools(input: ConfiguredToolsInput): McpToolHandl
     const entries = input.entries().filter((e) => e.enabled)
     const resolve: WorkspaceContextResolver = (id) => entries.some((e) => e.id === id) ? input.resolve(id) : { error: 'workspace 不在当前 endpoint 的授权范围内' }
     if (name === 'workspace_list') return handleWorkspaceList(entries)
+    if (name === 'workspace_open') return handleWorkspaceOpen(args, entries)
     if (name === 'read_many') return handleReadMany(args, entries, resolve, input.registry)
     if (name === 'git_status_batch') return handleGitStatusBatch(args, entries, resolve, input.registry)
     if (name === 'search_text' && Array.isArray(args.workspace_ids) && args.workspace_ids.length > 0) return handleCrossWorkspaceSearch(args, entries, resolve, input.registry)
@@ -34,7 +37,9 @@ export function createConfiguredTools(input: ConfiguredToolsInput): McpToolHandl
     if ('error' in resolved) return { ok: false, error: { code: 'INVALID_INPUT', message: resolved.error } }
     const toolArgs = { ...args }
     delete toolArgs.workspace_id; delete toolArgs.workspace_ids
-    return definition.execute(toolArgs, resolved.context)
+    const signal = input.signal?.() ?? resolved.context.signal
+    if (signal?.aborted) return { ok: false, error: { code: 'ABORTED', message: '操作已撤销' } }
+    return definition.execute(toolArgs, { ...resolved.context, signal })
   }
   return { list, call: async (name, args) => {
     const result = await dispatch(name, args)
