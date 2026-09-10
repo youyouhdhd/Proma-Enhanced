@@ -42,7 +42,9 @@ export function resolveShareRoot(root: McpShareRoot, resolver: RootResolver): { 
       path = workspace.projectRootPath ?? resolver.managedPath(workspace.slug)
     } else path = root.source.path
     const real = validateShareFolder(path)
-    if (root.source.type === 'local-folder' && key(real) !== key(resolve(root.source.path))) throw new Error('SHARE_ROOT_CHANGED')
+    // 固定路径校验沿用保存时的 realpath 表示；native 可将 Windows 8.3 名称展开。
+    // 不能拿 native 长路径直接与保存的短路径比较，否则会误拒绝合法目录。
+    if (root.source.type === 'local-folder' && key(realpathSync(root.source.path)) !== key(resolve(root.source.path))) throw new Error('SHARE_ROOT_CHANGED')
     return { health: { id: root.id, kind, state: 'available', path: real }, entry: { id: root.id, name: root.name, rootPath: real, enabled: root.enabled, permissions: root.permissions } }
   } catch (error) {
     const missing = error instanceof Error && (error.message === 'SHARE_FOLDER_MISSING' || 'code' in error && error.code === 'ENOENT')

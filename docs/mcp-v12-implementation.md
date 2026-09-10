@@ -71,3 +71,7 @@ bun run --filter='@proma/electron' smoke:mcp-bundle (Resolve-Path 'node_modules/
 2026-09-10 实测首次返回 ERR_NGROK_9009：Proma 通用 HTTP 代理环境被 ngrok 继承，触发账号计划限制。修复为仅对 ngrok 子进程移除 HTTP/HTTPS/ALL_PROXY 环境变量，保留用户 ngrok.yml 显式 proxy_url；错误单独分类 NGROK_PROXY_PLAN_REQUIRED。官方依据：https://ngrok.com/docs/errors/err_ngrok_9009 。
 
 修复后重试返回 ERR_NGROK_334（NGROK_ENDPOINT_ALREADY_ONLINE），确认存在早于本轮测试启动的用户 ngrok 进程；未停止或改动该连接，也未启用 pooling 将测试混入用户端点。故本次真实公网 Gate 未通过，不能标记为 PASS。另补充停止自有 ngrok 子进程时等待退出，再允许重连，避免自身旧进程释放端点的竞态。
+
+## v1.10.1 Windows CI 修复
+
+v1.10.0 Actions 34435796854 的共享目录回归失败（670 通过、1 失败）：native realpath 展开 runner TEMP 的 8.3 名称后，与保存的短路径做字符串比较，误报 SHARE_ROOT_CHANGED。固定路径校验改为与原保存流程一致的 realpath 表示；实际执行目录仍用 native 规范路径。junction 指向外部目录时，两者仍不相等，继续拒绝。v1.10.0 保持草稿，修复版为 v1.10.1，云端复核结果以新 Actions 为准。
