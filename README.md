@@ -6,12 +6,12 @@
 > - **自建渠道推理档位**：OpenAI 兼容自建渠道可声明推理档位并映射为 `reasoning_effort`，Chat / Agent 工具栏直接切换（上游仅对内置模型提供思考深度）；
 > - **飞书卡片显示渠道名**：同一模型存在多渠道时，卡片底部可分辨实际使用的渠道；
 > - **渲染修复**：未标注语言的代码块不再把路径清单误判为编程语言；
-> - **MCP 共享与远程访问**：一个 Connector 动态管理多个项目，按项目授权 Direct 读写与 Shell，支持独立 ngrok 配置、加密 Credential、已有 Endpoint 安全复用及多模型异步分析；当前稳定版本与升级说明见 [v1.11.0 发布说明](./release-notes/v1.11.0.md)；
+> - **MCP 共享与远程访问**：一个 Connector 动态管理多个项目，按项目授权 Direct 读写与 Shell，支持独立 ngrok 配置、加密 Credential、已有 Endpoint 安全复用及多模型异步分析；当前稳定版本与升级说明见 [v1.12.1 发布说明](./release-notes/v1.12.1.md)；
 > - **稳定打包方案**：固定 hoisted 安装布局、Electron 二进制自检的一键构建脚本（`scripts/build-win.ps1`）。
 >
 > 同步策略：定期合并上游（`bun run sync:upstream`），完整差异清单与冲突处理记录见 [docs/fork-maintenance.md](./docs/fork-maintenance.md)。
 
-[Fork Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases) | [Fork Maintenance](./docs/fork-maintenance.md) | [v1.11.0](./release-notes/v1.11.0.md)
+[Fork Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases) | [Fork Maintenance](./docs/fork-maintenance.md) | [v1.12.1](./release-notes/v1.12.1.md)
 
 ![image-20260909165815654](https://img.erlich.fun/personal-blog/proma/image-20260909165815654.png)
 

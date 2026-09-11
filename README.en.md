@@ -6,12 +6,12 @@
 > - **Custom-channel reasoning levels**: self-hosted OpenAI-compatible channels can declare reasoning levels mapped to `reasoning_effort`, switchable directly in the Chat / Agent toolbar (upstream only offers thinking depth for built-in models);
 > - **Feishu cards show the channel name**: with the same model on multiple channels, the actual channel is now visible on the card footer;
 > - **Rendering fix**: untagged code blocks no longer misclassify path lists as programming languages;
-> - **Managed ngrok and multi-project MCP**: isolated configuration and credentials, verified Endpoint reuse, dynamic project permissions, and Agent queues; see the [v1.11.0 release notes](./release-notes/v1.11.0.md);
+> - **Managed ngrok and multi-project MCP**: isolated configuration and credentials, verified Endpoint reuse, dynamic project permissions, and Agent queues; see the [v1.12.1 release notes](./release-notes/v1.12.1.md);
 > - **Stable packaging**: pinned hoisted install layout plus an Electron binary self-check in the one-command build script (`scripts/build-win.ps1`).
 >
 > Sync policy: upstream is merged regularly (`bun run sync:upstream`); the full diff inventory and conflict notes live in [docs/fork-maintenance.md](./docs/fork-maintenance.md).
 
-[Fork Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases) | [Fork Maintenance](./docs/fork-maintenance.md) | [v1.11.0](./release-notes/v1.11.0.md)
+[Fork Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases) | [Fork Maintenance](./docs/fork-maintenance.md) | [v1.12.1](./release-notes/v1.12.1.md)
 
 ![Proma Poster](https://img.erlich.fun/personal-blog/uPic/pb.png)
 
