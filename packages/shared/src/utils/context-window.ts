@@ -36,7 +36,7 @@ export function inferCodexAlignedGPT5ContextWindow(modelId: string | undefined):
     case 'gpt-5.6-sol':
     case 'gpt-5.6-terra':
     case 'gpt-5.6-luna': return CODEX_GPT_56_CONTEXT_WINDOW
-    case 'gpt-6-astra': return ONE_MILLION_CONTEXT_WINDOW
+    case 'gpt-6-astra': return CODEX_GPT_56_CONTEXT_WINDOW
     default: return undefined
   }
 }
@@ -54,7 +54,7 @@ const ONE_MILLION_CONTEXT_RULES = {
     'claude-fable-5',
   ],
   // DeepSeek
-  deepseek: ['deepseek-v4'],
+  deepseek: ['deepseek-v4', 'deepseek-flash'],
   // 智谱 GLM
   glm: ['glm-5.3', 'glm-5.3-flash', 'glm-5.2'],
   // 小米 MiMo

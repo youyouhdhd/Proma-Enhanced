@@ -9,6 +9,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, mkdirSync, statSync, lstatSync, openSync, readSync, closeSync, realpathSync } from 'node:fs'
 import { cp as cpAsync, readFile as readFileAsync, realpath as realpathAsync, writeFile as writeFileAsync } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
+import { writeExistingSkillFile } from './skill-file-write'
 import { rmSyncWithRetry, renameIfDestinationAbsentWithRetry, renameWithRetry } from './fs-retry'
 import { getLocalProjectRootStatus } from './project-root-health'
 import { writeJsonFileAtomic, readJsonFileSafe, writeTextFileAtomic } from './safe-file'
@@ -709,7 +710,7 @@ export function saveWorkspaceMcpConfig(workspaceSlug: string, config: WorkspaceM
   const mcpPath = getWorkspaceMcpPath(workspaceSlug)
 
   try {
-    writeFileSync(mcpPath, JSON.stringify(normalizeWorkspaceMcpConfig(config), null, 2), 'utf-8')
+    writeJsonFileAtomic(mcpPath, normalizeWorkspaceMcpConfig(config))
     console.log(`[Agent 工作区] 已保存 MCP 配置: ${workspaceSlug}`)
   } catch (error) {
     console.error('[Agent 工作区] 保存 MCP 配置失败:', error)
@@ -785,8 +786,11 @@ function parseSkillFrontmatter(content: string, slug: string, enabled: boolean):
 
 export function getWorkspaceCapabilities(workspaceSlug: string): WorkspaceCapabilities {
   const mcpConfig = getWorkspaceMcpConfig(workspaceSlug)
-  const skills = getWorkspaceSkills(workspaceSlug)
-  const builtinMcpServers = listBuiltinMcpServers({ workspaceSlug })
+  // 能力摘要供 UI 状态展示和变更提示使用；保留 inactive Skill 才能将
+  // skills/ ↔ skills-inactive/ 的移动识别为启用/关闭，而非移除/新增。
+  // Agent 运行时仍只从 skills/ 读取实际启用的 Skill。
+  const skills = getAllWorkspaceSkills(workspaceSlug)
+  const builtinMcpServers = listBuiltinMcpServers()
   const memory = getWorkspaceMemorySummary(workspaceSlug)
 
   const mcpServers = Object.entries(mcpConfig.servers ?? {}).map(([name, entry]) => ({
@@ -1777,17 +1781,8 @@ export function writeSkillFile(workspaceSlug: string, skillSlug: string, relativ
     throw new Error(`内容过大（${(byteLen / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
   }
 
-  if (existsSync(abs) && statSync(abs).isDirectory()) {
-    throw new Error(`目标是目录，无法写入文件内容: ${relativePath}`)
-  }
-
-  // 自动创建父目录
-  const parent = dirname(abs)
-  if (!existsSync(parent)) {
-    mkdirSync(parent, { recursive: true })
-  }
-
-  writeFileSync(abs, content, 'utf-8')
+  // 资源创建由 createSkillEntry 负责；编辑保存不能重建已删除/重命名的旧路径。
+  writeExistingSkillFile(abs, content)
   console.log(`[Agent 工作区] 已更新 Skill 子文件: ${workspaceSlug}/${skillSlug}/${relativePath}`)
 }
 

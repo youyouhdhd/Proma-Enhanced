@@ -33,6 +33,7 @@ export type ProviderType =
   | 'xiaomi'
   | 'xiaomi-token-plan'
   | 'openai-codex'
+  | 'github-copilot'
   | 'xai'
   /**
    * OpenAI Chat Completions 的自定义请求地址。
@@ -70,6 +71,7 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   'xiaomi-token-plan': 'https://token-plan-cn.xiaomimimo.com/anthropic',
   // 订阅登录渠道的 baseUrl 由 Pi SDK 内部管理，无需用户填写。
   'openai-codex': '',
+  'github-copilot': '',
   xai: '',
   custom: '',
 }
@@ -100,6 +102,7 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   xiaomi: '小米 MiMo (API)',
   'xiaomi-token-plan': '小米 MiMo Token Plan',
   'openai-codex': 'ChatGPT 订阅 (Codex)',
+  'github-copilot': 'GitHub Copilot 订阅',
   xai: 'xAI 订阅 (Grok)',
   custom: 'OpenAI Chat Completions（自定义地址）',
 }
@@ -228,6 +231,59 @@ export function isCodexCredentialExpired(credentials: CodexOAuthCredentials, ske
   return Date.now() >= credentials.expires - skewMs
 }
 
+/** GitHub Copilot 订阅 OAuth 凭据。 */
+export interface GithubCopilotOAuthCredentials {
+  /** Copilot API access token。 */
+  access: string
+  /** GitHub device-code OAuth token，用于续签 Copilot token。 */
+  refresh: string
+  /** Copilot access token 过期时间（Unix 毫秒）。 */
+  expires: number
+  /** GitHub Enterprise Server 域名；未填写时使用 github.com。 */
+  enterpriseUrl?: string
+  /** 当前订阅和组织策略实际允许使用的模型 ID。 */
+  availableModelIds: string[]
+}
+
+/** 仅持久化 GitHub Copilot OAuth 的业务字段，隔离 Pi runtime 的临时字段（如 type）。 */
+export function serializeGithubCopilotCredentials(credentials: GithubCopilotOAuthCredentials): string {
+  return JSON.stringify({
+    access: credentials.access,
+    refresh: credentials.refresh,
+    expires: credentials.expires,
+    ...(credentials.enterpriseUrl ? { enterpriseUrl: credentials.enterpriseUrl } : {}),
+    availableModelIds: [...new Set(credentials.availableModelIds)],
+  })
+}
+
+export function parseGithubCopilotCredentials(secret: string): GithubCopilotOAuthCredentials | null {
+  const trimmed = secret.trim()
+  if (!trimmed) return null
+  try {
+    const parsed = JSON.parse(trimmed) as Partial<GithubCopilotOAuthCredentials>
+    if (typeof parsed.access !== 'string' || !parsed.access
+      || typeof parsed.refresh !== 'string' || !parsed.refresh
+      || typeof parsed.expires !== 'number'
+      || !Array.isArray(parsed.availableModelIds)
+      || !parsed.availableModelIds.every((id) => typeof id === 'string')) {
+      return null
+    }
+    return {
+      access: parsed.access,
+      refresh: parsed.refresh,
+      expires: parsed.expires,
+      availableModelIds: [...new Set(parsed.availableModelIds)],
+      ...(typeof parsed.enterpriseUrl === 'string' && parsed.enterpriseUrl ? { enterpriseUrl: parsed.enterpriseUrl } : {}),
+    }
+  } catch {
+    return null
+  }
+}
+
+export function isGithubCopilotCredentialExpired(credentials: GithubCopilotOAuthCredentials, skewMs = 60_000): boolean {
+  return Date.now() >= credentials.expires - skewMs
+}
+
 /**
  * xAI（Grok/X 订阅）OAuth 凭据。
  *
@@ -301,6 +357,7 @@ export const VOLCENGINE_CODING_PLAN_MODELS: readonly ChannelModel[] = [
   { id: 'minimax-m3', name: 'MiniMax M3', enabled: true },
   { id: 'glm-5.3', name: 'GLM-5.3', enabled: true },
   { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true },
+  { id: 'deepseek-flash', name: 'DeepSeek Flash', enabled: true },
   { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', enabled: true },
   { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', enabled: true },
 ]
@@ -511,6 +568,12 @@ export const CHANNEL_IPC_CHANNELS = {
   CODEX_OAUTH_OPEN_BROWSER: 'channel:codex-oauth-open-browser',
   /** 渲染进程提交手动授权回调 URL（首次生效，重复提交忽略） */
   CODEX_OAUTH_SUBMIT_CALLBACK: 'channel:codex-oauth-submit-callback',
+  /** 发起 GitHub Copilot OAuth device-code 登录 */
+  GITHUB_COPILOT_OAUTH_LOGIN: 'channel:github-copilot-oauth-login',
+  /** 取消进行中的 GitHub Copilot OAuth 登录 */
+  GITHUB_COPILOT_OAUTH_CANCEL: 'channel:github-copilot-oauth-cancel',
+  /** GitHub Copilot device-code 已就绪 */
+  GITHUB_COPILOT_OAUTH_DEVICE_CODE: 'channel:github-copilot-oauth-device-code',
   /** 发起 xAI（Grok/X 订阅）OAuth 登录 */
   XAI_OAUTH_LOGIN: 'channel:xai-oauth-login',
   /** 取消进行中的 xAI OAuth 登录流程 */
@@ -602,6 +665,21 @@ export interface CodexOAuthManualCodeRequest {
 /** 提交手动回调 URL 的结果；重复提交只允许首次生效。 */
 export interface CodexOAuthSubmitCallbackResult {
   accepted: boolean
+}
+
+/** GitHub Copilot OAuth 登录结果。 */
+export interface GithubCopilotOAuthLoginResult {
+  success: boolean
+  /** 序列化后的 OAuth 凭据；由 channel-manager 加密写入 Channel.apiKey。 */
+  credentials?: string
+  message?: string
+}
+
+/** Pi GitHub Copilot device-code 登录流程的用户可见信息。 */
+export interface GithubCopilotOAuthDeviceCode {
+  userCode: string
+  verificationUri: string
+  qrCodeData?: string
 }
 
 /** xAI（Grok/X 订阅）OAuth 登录结果。 */

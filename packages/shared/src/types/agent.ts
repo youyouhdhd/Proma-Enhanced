@@ -944,6 +944,29 @@ export type McpTransportTypeAlias = 'streamableHttp' | 'streamable-http' | 'stre
 /** MCP 传输类型输入；保存和运行前会规范化为 McpTransportType */
 export type McpTransportTypeInput = McpTransportType | McpTransportTypeAlias
 
+/**
+ * MCP 的非敏感 OAuth 客户端元数据。
+ *
+ * Agent 可依据官方文档写入这些公开参数；access token、refresh token、client secret
+ * 等敏感值只能通过用户显式的授权流程保存到系统 Keychain。
+ */
+export interface McpOAuthConfiguration {
+  /** 可选的展示/诊断标识，不参与密钥存储。 */
+  provider?: string
+  /** OAuth authorization endpoint。未提供时尝试从 MCP protected-resource metadata 发现。 */
+  authorizationEndpoint?: string
+  /** OAuth token endpoint。未提供时尝试从 MCP protected-resource metadata 发现。 */
+  tokenEndpoint?: string
+  /** 支持 Dynamic Client Registration 的 registration endpoint。 */
+  registrationEndpoint?: string
+  /** 已公开注册的 OAuth client ID；没有 DCR 时必须提供。 */
+  clientId?: string
+  /** 授权码交换是否要求用户通过安全 UI 保存 OAuth client secret。 */
+  clientSecretRequired?: boolean
+  /** 请求授权时使用的 scope；为空时使用 MCP 声明的 scopes_supported。 */
+  scopes?: string[]
+}
+
 /** MCP 服务器条目 */
 export interface McpServerEntry {
   type: McpTransportType
@@ -961,6 +984,8 @@ export interface McpServerEntry {
   timeout?: number
   /** 是否启用 */
   enabled: boolean
+  /** 非敏感 OAuth 客户端元数据；token 只保存在 Keychain。 */
+  oauth?: McpOAuthConfiguration
   /** 是否为内置 MCP（不可删除，仅可配置 env） */
   isBuiltin?: boolean
   /** 最后一次测试结果 */
@@ -1012,8 +1037,8 @@ export interface McpInstallMutationResult extends McpConnectionMutationResult {
   installed: boolean
 }
 
-/** OAuth-capable remote MCP provider currently supported by the built-in connector flow. */
-export type McpOAuthProvider = 'notion' | 'github'
+/** OAuth provider display/credential namespace. Agent-configured MCP 可使用任意稳定字符串。 */
+export type McpOAuthProvider = string
 
 /** Renderer-to-main request for a remote MCP authorization-code + PKCE flow. */
 export interface StartMcpOAuthInput {
@@ -1021,6 +1046,16 @@ export interface StartMcpOAuthInput {
   serverName: string
   provider: McpOAuthProvider
   serverUrl: string
+  /** Agent 或目录提供的非敏感 OAuth 客户端元数据。 */
+  oauth?: McpOAuthConfiguration
+}
+
+/** Renderer-to-main request to store an OAuth client secret in Keychain; never exposed to Agent/tool results. */
+export interface SaveMcpOAuthClientSecretInput {
+  workspaceSlug: string
+  serverName: string
+  serverUrl: string
+  clientSecret: string
 }
 
 /** OAuth connection result that deliberately excludes all secret material. */
@@ -1627,6 +1662,16 @@ export interface ExitPlanAllowedPrompt {
   prompt: string
 }
 
+/** 经主进程校验的计划 Markdown 工件，用于审批时的只读预览。 */
+export interface ExitPlanDocument {
+  /** 计划文件的规范化绝对路径；必须位于当前会话的 plan/ 目录。 */
+  filePath: string
+  /** 供右侧预览 Tab 展示的文件名。 */
+  displayName: string
+  /** 提交审批时的内容哈希；批准前若文件变化则要求重新提交。 */
+  contentHash: string
+}
+
 /** ExitPlanMode 请求（主进程 → 渲染进程） */
 export interface ExitPlanModeRequest {
   /** 请求唯一 ID */
@@ -1637,6 +1682,8 @@ export interface ExitPlanModeRequest {
   toolInput: Record<string, unknown>
   /** 解析后的 allowedPrompts 列表 */
   allowedPrompts: ExitPlanAllowedPrompt[]
+  /** 本次待审批的计划文档；未提供或校验失败时省略。 */
+  planDocument?: ExitPlanDocument
 }
 
 /** ExitPlanMode 用户选择行为 */
@@ -1854,6 +1901,8 @@ export const AGENT_IPC_CHANNELS = {
   INSTALL_MCP_AND_VALIDATE: 'agent:install-mcp-and-validate',
   /** 启动远程 MCP 的 OAuth PKCE 授权 */
   START_MCP_OAUTH: 'agent:start-mcp-oauth',
+  /** 将 OAuth client secret 加密保存到系统 Keychain。 */
+  SAVE_MCP_OAUTH_CLIENT_SECRET: 'agent:save-mcp-oauth-client-secret',
   /** 安全保存远程 MCP 的静态 API Key / Token */
   SAVE_MCP_API_KEY: 'agent:save-mcp-api-key',
   /** 删除工作区 MCP 对应的系统安全凭据，不返回任何凭据。 */
@@ -1864,8 +1913,6 @@ export const AGENT_IPC_CHANNELS = {
   SET_CLI_INTEGRATION_ENABLED: 'agent:set-cli-integration-enabled',
   /** 测试 MCP 服务器连接 */
   TEST_MCP_SERVER: 'agent:test-mcp-server',
-  /** 启用或关闭 Proma 内置 MCP */
-  SET_BUILTIN_MCP_ENABLED: 'agent:set-builtin-mcp-enabled',
   /** 获取工作区 Skill 列表 */
   GET_SKILLS: 'agent:get-skills',
   /** 获取工作区 Skills 目录绝对路径 */

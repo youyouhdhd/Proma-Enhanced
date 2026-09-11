@@ -12,6 +12,7 @@ import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import { AGENT_IPC_CHANNELS, getTerminalProfilesForPlatform, normalizePathForCompare, parseTerminalProfile } from '@proma/shared'
 import type {
+  AgentWorkspace,
   CreateAutomationInput,
   PromaPermissionMode,
   TerminalProfile,
@@ -35,13 +36,13 @@ import {
 import { getAgentSessionMeta, updateAgentSessionMeta } from '../agent-session-manager'
 import { getMainWindow } from '../main-window-store'
 import { getMainRepoRoot, listWorktrees } from '../git-diff-service'
-import { getWorktreeRepos } from '../agent-workspace-manager'
-import { isBuiltinMcpUserEnabled } from '../builtin-mcp/settings'
+import { getWorktreeRepos, getAgentWorkspace, listAgentWorkspaces, listAgentWorkspacesWithProjectRootStatus } from '../agent-workspace-manager'
+import { resolveAutomationWorkspace, summarizeAutomationWorkspace } from './automation-workspace'
 import { downloadInstaller, launchInstaller } from '../installer-downloader'
 import { fetchInstallerManifest, findInstallerSource } from '../installer-manifest'
 import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { buildPiCollaborationTools } from '../agent-collaboration-tools'
-import { buildPiNanoBananaTools } from '../chat-tools/nano-banana-mcp'
+import { configureWorkspaceMcp, listWorkspaceMcpServers } from '../mcp-configuration-service'
 import { getVisionRelayRouteLabel, inspectImageWithVisionRelay, isVisionRelayConfigured, isVisionRelayEligibleForModel } from '../vision-relay-service'
 import {
   listTodos,
@@ -72,13 +73,6 @@ import {
   snoozePlanningReminder,
 } from '../planning-manager'
 import { broadcastPlanningAgentOperation, broadcastPlanningChanged } from '../planning-events'
-import {
-  fetchWebPage,
-  formatFetchResults,
-  formatSearchResults,
-  isWebSearchEnabledForAgent,
-  searchWeb,
-} from '../web-search-service'
 import { browserController } from '../browser-controller'
 import { resolveBrowserProfileKey } from '../browser-profile-policy'
 import {
@@ -107,7 +101,7 @@ export interface PiBuiltinToolsContext {
   modelId?: string
   workspaceId?: string
   workspaceSlug?: string
-  /** 当前 Agent 工作目录；用于解析生图产物、参考图和本地网页预览的相对路径。 */
+  /** 当前 Agent 工作目录；用于解析本地网页预览等相对路径。 */
   agentCwd?: string
   /** 图片外发前必须校验在这些已授权目录内。 */
   allowedRoots?: string[]
@@ -126,27 +120,6 @@ function jsonToolResult(payload: unknown): AgentToolResult<unknown> {
     content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
     details: payload,
   } as AgentToolResult<unknown>
-}
-
-function textToolResult(text: string, details?: unknown): AgentToolResult<unknown> {
-  return {
-    content: [{ type: 'text', text }],
-    details,
-  } as AgentToolResult<unknown>
-}
-
-// ===== Web 工具 =====
-
-type WebSearchDepth = 'basic' | 'advanced'
-
-function isWebSearchDepth(value: unknown): value is WebSearchDepth {
-  return value === 'basic' || value === 'advanced'
-}
-
-function stringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined
-  const items = value.map((item) => String(item).trim()).filter(Boolean)
-  return items.length > 0 ? items : undefined
 }
 
 function numberOrUndefined(value: unknown): number | undefined {
@@ -172,62 +145,80 @@ function defaultTodoDueAt(): number {
   return date.getTime()
 }
 
-function buildWebTools(sdk: PiSdk): ToolDefinition[] {
+// ===== 工作区 MCP 管理工具 =====
+
+/**
+ * Agent 只能通过受控工具写入无凭据 MCP transport；敏感 headers/env/OAuth 始终由
+ * 现有 UI + Keychain 流程处理。每次启用都会执行真实握手和 listTools 验证。
+ */
+function buildWorkspaceMcpManagementTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  if (!ctx.workspaceSlug || ctx.triggeredBy === 'automation' || ctx.triggeredBy === 'delegation') return []
+
   return [
     sdk.defineTool({
-      name: 'WebSearch',
-      label: '搜索网页',
-      description: 'Search the web for up-to-date information through Proma\'s Tavily integration. Use for current events, recent data, facts that may be stale, or when the user explicitly asks to search.',
-      promptSnippet: 'WebSearch: search the web for current information and cite source URLs in the final answer.',
-      parameters: Type.Object({
-        query: Type.String({ description: 'Search query. Keep it concise and avoid including private local file contents, API keys, tokens, or secrets.' }),
-        maxResults: Type.Optional(Type.Number({ description: 'Maximum number of results to return. Default 5, max 10.' })),
-        searchDepth: Type.Optional(Type.Union([Type.Literal('basic'), Type.Literal('advanced')], { description: 'Search depth. Use basic by default; advanced costs more but may improve recall.' })),
-        includeDomains: Type.Optional(Type.Array(Type.String({ description: 'Domain to include, e.g. example.com' }), { description: 'Optional allowlist of domains.' })),
-        excludeDomains: Type.Optional(Type.Array(Type.String({ description: 'Domain to exclude, e.g. example.com' }), { description: 'Optional blocklist of domains.' })),
-      }),
-      async execute(_toolCallId, params, signal) {
-        const args = params as Record<string, unknown>
-        const query = typeof args.query === 'string' ? args.query.trim() : ''
-        if (!query) throw new Error('query 必填')
-        const result = await searchWeb({
-          query,
-          maxResults: numberOrUndefined(args.maxResults),
-          searchDepth: isWebSearchDepth(args.searchDepth) ? args.searchDepth : undefined,
-          includeDomains: stringArray(args.includeDomains),
-          excludeDomains: stringArray(args.excludeDomains),
-          signal,
-        })
-        return textToolResult(formatSearchResults(result), result)
+      name: 'proma_workspace_list_mcp_servers',
+      label: '列出工作区 MCP',
+      description: 'List the current workspace MCP servers and their safe connection status. No credentials, headers, environment values, or endpoint details are returned.',
+      promptSnippet: 'Use this before adding or updating an MCP to avoid overwriting an existing server. If the same server exists with a different connection, ask the user before retrying with replaceExisting=true.',
+      parameters: Type.Object({}),
+      async execute() {
+        return jsonToolResult({ servers: listWorkspaceMcpServers(ctx.workspaceSlug!) })
       },
     }),
     sdk.defineTool({
-      name: 'WebFetch',
-      label: '抓取网页',
-      description: 'Fetch and extract readable Markdown content from a URL through Proma\'s Tavily integration. Use after WebSearch or when the user gives a URL and asks to inspect page content.',
-      promptSnippet: 'WebFetch: fetch readable webpage content by URL. Use it to inspect source pages and cite URLs.',
+      name: 'proma_workspace_configure_mcp_server',
+      label: '配置工作区 MCP',
+      description: 'Create or update a non-sensitive workspace MCP transport and validate it with a real handshake and listTools call. Credentials, authorization headers, and environment secrets are intentionally not accepted; guide the user to the MCP UI for those.',
+      promptSnippet: 'Use only after confirming the official MCP transport. A successful server becomes available in the next user message or new run; tools cannot be hot-added to the current run.',
       parameters: Type.Object({
-        url: Type.String({ description: 'HTTP/HTTPS URL to fetch.' }),
-        prompt: Type.Optional(Type.String({ description: 'Optional extraction focus or question. Use when only part of a page is relevant.' })),
-        extractDepth: Type.Optional(Type.Union([Type.Literal('basic'), Type.Literal('advanced')], { description: 'Extraction depth. Use basic by default; advanced may handle difficult pages better.' })),
-        maxChars: Type.Optional(Type.Number({ description: 'Maximum characters returned to the model. Default 20000.' })),
+        name: Type.String({ minLength: 1, maxLength: 120, description: 'Stable MCP server name. Reuses and updates an existing server with this exact name.' }),
+        type: Type.Union([Type.Literal('stdio'), Type.Literal('http'), Type.Literal('sse')]),
+        command: Type.Optional(Type.String({ description: 'Required for stdio MCP.' })),
+        args: Type.Optional(Type.Array(Type.String(), { description: 'Optional stdio command arguments.' })),
+        url: Type.Optional(Type.String({ description: 'Required for HTTP or SSE MCP.' })),
+        timeout: Type.Optional(Type.Number({ minimum: 1, maximum: 300, description: 'Optional handshake timeout in seconds for any MCP transport.' })),
+        enabled: Type.Optional(Type.Boolean({ description: 'Defaults to true. When true, Proma enables the server only after handshake and listTools succeed.' })),
+        oauth: Type.Optional(Type.Object({
+          provider: Type.Optional(Type.String({ description: 'Stable, non-secret OAuth provider label, for example github.' })),
+          authorizationEndpoint: Type.Optional(Type.String({ description: 'Public HTTPS OAuth authorization endpoint from official documentation.' })),
+          tokenEndpoint: Type.Optional(Type.String({ description: 'Public HTTPS OAuth token endpoint from official documentation.' })),
+          registrationEndpoint: Type.Optional(Type.String({ description: 'Public HTTPS Dynamic Client Registration endpoint, when the provider supports it.' })),
+          clientId: Type.Optional(Type.String({ description: 'Public OAuth client ID. Never pass a client secret or token.' })),
+          clientSecretRequired: Type.Optional(Type.Boolean({ description: 'Set true only when official documentation requires a client secret; the user will enter it through the encrypted MCP card UI.' })),
+          scopes: Type.Optional(Type.Array(Type.String(), { description: 'Optional OAuth scopes. Never include credentials.' })),
+        }, { description: 'Optional non-sensitive OAuth metadata. After saving, the MCP card lets the user explicitly authorize it in the browser.' })),
+        replaceExisting: Type.Optional(Type.Boolean({ description: 'Set true only after the user explicitly confirms replacing an existing server connection.' })),
       }),
-      async execute(_toolCallId, params, signal) {
-        const args = params as Record<string, unknown>
-        const url = typeof args.url === 'string' ? args.url.trim() : ''
-        if (!url) throw new Error('url 必填')
-        const maxChars = numberOrUndefined(args.maxChars)
-        const result = await fetchWebPage({
-          url,
-          prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
-          extractDepth: isWebSearchDepth(args.extractDepth) ? args.extractDepth : undefined,
-          maxChars,
-          signal,
+      async execute(_toolCallId, params) {
+        const args = params as {
+          name: string
+          type: 'stdio' | 'http' | 'sse'
+          command?: string
+          args?: string[]
+          url?: string
+          timeout?: number
+          enabled?: boolean
+          oauth?: {
+            provider?: string
+            authorizationEndpoint?: string
+            tokenEndpoint?: string
+            registrationEndpoint?: string
+            clientId?: string
+            clientSecretRequired?: boolean
+            scopes?: string[]
+          }
+          replaceExisting?: boolean
+        }
+        const server = await configureWorkspaceMcp(ctx.workspaceSlug!, args)
+        return jsonToolResult({
+          server,
+          nextStep: server.availableNextRun
+            ? `${server.updatedExisting ? 'MCP 已更新' : 'MCP 已创建'}并验证启用；它会在下一条用户消息或新会话中作为工具可用。本轮工具集不会热更新。`
+            : 'MCP 已保存但未启用。请检查连接配置，或在 MCP 管理界面完成凭据配置后重新验证。',
         })
-        return textToolResult(formatFetchResults(result, { maxChars }), result)
       },
     }),
-  ] as unknown as ToolDefinition[]
+  ] as ToolDefinition[]
 }
 
 // ===== Automation 工具 =====
@@ -244,7 +235,15 @@ interface AutomationSummary {
   [key: string]: unknown
 }
 
-function summarizeAutomation(a: import('@proma/shared').Automation, includeHistory: boolean): AutomationSummary {
+function summarizeAutomation(
+  a: import('@proma/shared').Automation,
+  includeHistory: boolean,
+  workspacesById?: ReadonlyMap<string, AgentWorkspace>,
+): AutomationSummary {
+  // 列表使用本次请求的索引快照；失效归属也不回退逐项磁盘读取。
+  const workspace = a.workspaceId
+    ? (workspacesById ? workspacesById.get(a.workspaceId) : getAgentWorkspace(a.workspaceId))
+    : undefined
   return {
     id: a.id,
     name: a.name,
@@ -263,6 +262,8 @@ function summarizeAutomation(a: import('@proma/shared').Automation, includeHisto
     completedAt: a.completedAt,
     sessionMode: a.sessionMode,
     workspaceId: a.workspaceId,
+    workspaceName: workspace?.name,
+    workspaceSlug: workspace?.slug,
     sourceSessionId: a.sourceSessionId,
     lastSessionId: a.lastSessionId,
     createdAt: a.createdAt,
@@ -333,6 +334,18 @@ function validateScheduleFields(input: Partial<CreateAutomationInput | UpdateAut
 function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
   return [
     sdk.defineTool({
+      name: 'mcp__automation__list_workspaces',
+      label: '列出定时任务目标工作区',
+      description: '查询可作为定时任务创建目标的工作区，仅返回 ID、名称、slug、是否当前工作区和项目根状态，不读取文件内容。跨工作区创建前先查询并用精确 ID 选择；重名时向用户确认。managed 表示托管项目；missing/not_directory/unavailable 表示本地项目根不可用。',
+      parameters: Type.Object({}),
+      async execute() {
+        const workspaces = await listAgentWorkspacesWithProjectRootStatus()
+        return jsonToolResult({
+          workspaces: workspaces.map((workspace) => summarizeAutomationWorkspace(workspace, ctx.workspaceId)),
+        })
+      },
+    }),
+    sdk.defineTool({
       name: 'mcp__automation__list_automations',
       label: '列出定时任务',
       description: '列出 Proma 持久化定时任务。用于查看已有长期反复任务、判断是否需要新建任务、检查运行状态和最近失败情况。',
@@ -342,9 +355,10 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as { active?: boolean; includeHistory?: boolean }
+        const workspacesById = new Map(listAgentWorkspaces().map((workspace) => [workspace.id, workspace]))
         const items = listAutomations()
           .filter((a) => args.active === undefined || a.active === args.active)
-          .map((a) => summarizeAutomation(a, args.includeHistory === true))
+          .map((a) => summarizeAutomation(a, args.includeHistory === true, workspacesById))
         return jsonToolResult({ automations: items })
       },
     }),
@@ -367,13 +381,14 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
     sdk.defineTool({
       name: 'mcp__automation__create_automation',
       label: '创建定时任务',
-      description: '创建 Proma 持久化定时任务。适合无人值守、有稳定价值的场景。纯提醒/闹钟、需要用户实时参与判断、或现在就该做完即终结的事不要创建。',
+      description: '创建 Proma 持久化定时任务。可通过 workspaceId 指定其他工作区，先用 list_workspaces 查询；省略则使用当前工作区。适合无人值守、有稳定价值的场景。纯提醒/闹钟、需要用户实时参与判断、或现在就该做完即终结的事不要创建。',
       parameters: automationCreateToolParameters,
       async execute(_toolCallId: string, params: unknown) {
         const args = params as Record<string, unknown>
         if (ctx.triggeredBy === 'automation' || getCurrentAutomationId(ctx)) {
           throw new Error('当前是定时任务自动执行，禁止递归创建新的定时任务')
         }
+        const targetWorkspace = resolveAutomationWorkspace(args.workspaceId, ctx.workspaceId, getAgentWorkspace)
         const input: CreateAutomationInput = {
           name: assertNonBlank(args.name as string, 'name'),
           prompt: assertNonBlank(args.prompt as string, 'prompt'),
@@ -389,7 +404,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           maxRuns: args.maxRuns as number | null | undefined,
           channelId: ctx.channelId,
           modelId: ctx.modelId,
-          workspaceId: ctx.workspaceId,
+          workspaceId: targetWorkspace?.id,
           sessionMode: args.sessionMode as 'daily' | 'reuse' | undefined,
           sourceSessionId: ctx.sessionId,
           active: (args.active as boolean) ?? true,
@@ -1554,12 +1569,11 @@ export async function buildPiBuiltinTools(
 
   const tools: ToolDefinition[] = []
 
-  if (isWebSearchEnabledForAgent()) {
-    try {
-      tools.push(...buildWebTools(sdk))
-    } catch (error) {
-      console.error('[Pi 桥接] 注入 WebSearch/WebFetch 工具失败:', error)
-    }
+  // MCP 管理通过受控工具写入并验证；不要求 Agent 直接编辑 mcp.json。
+  try {
+    tools.push(...buildWorkspaceMcpManagementTools(sdk, ctx))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入 MCP 管理工具失败:', error)
   }
 
   // 自动化是 Proma 基础运行时能力，不作为可配置 MCP 展示或开关。
@@ -1637,18 +1651,6 @@ export async function buildPiBuiltinTools(
     tools.push(...buildVisionRelayTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入视觉助手失败:', error)
-  }
-
-  if (isBuiltinMcpUserEnabled('nano-banana')) {
-    try {
-      tools.push(...buildPiNanoBananaTools(sdk, {
-        sessionId: ctx.sessionId,
-        agentCwd: ctx.agentCwd,
-        allowedRoots: ctx.allowedRoots,
-      }))
-    } catch (error) {
-      console.error('[Pi 桥接] 注入 nano-banana 工具失败:', error)
-    }
   }
 
   const cloudTools = buildPromaCloudTools(sdk, ctx)

@@ -21,6 +21,7 @@ import type {
   ChannelPlanQuotaResult,
   ChannelPlanQuotaWindow,
   CodexOAuthCredentials,
+  GithubCopilotOAuthCredentials,
   XaiOAuthCredentials,
   FetchModelsInput,
   FetchModelsResult,
@@ -33,16 +34,21 @@ import {
   parseCodexCredentials,
   serializeCodexCredentials,
   isCodexCredentialExpired,
+  parseGithubCopilotCredentials,
+  serializeGithubCopilotCredentials,
+  isGithubCopilotCredentialExpired,
   parseXaiCredentials,
   serializeXaiCredentials,
   isXaiCredentialExpired,
   VOLCENGINE_CODING_PLAN_MODELS,
 } from '@proma/shared'
 import { refreshCodexOAuth } from './codex-oauth-service'
+import { refreshGithubCopilotOAuth } from './github-copilot-oauth-service'
 import { refreshXaiOAuth } from './xai-oauth-service'
 import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from './xai-oauth-credentials'
 import { parseCodexPlanQuotaResponse } from './codex-plan-quota'
-import { listCodexModels, listXaiModels } from './adapters/pi-model-registry'
+import { queryGithubCopilotPlanQuota } from './github-copilot-plan-quota'
+import { listCodexModels, listGithubCopilotModels, listXaiModels } from './adapters/pi-model-registry'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import {
@@ -67,6 +73,7 @@ const ARK_CODING_PLAN_TEST_MODEL = 'doubao-seed-2.0-code'
 const DEEPSEEK_PRESET_MODELS: ChannelModel[] = [
   { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', enabled: true },
   { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true },
+  { id: 'deepseek-flash', name: 'DeepSeek Flash', enabled: true },
   { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp', enabled: true },
 ]
 const KIMI_PRESET_MODELS: ChannelModel[] = [
@@ -95,6 +102,7 @@ const ARK_CODING_PLAN_MODELS: ChannelModel[] = [
   { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', enabled: true },
   { id: 'minimax-m3', name: 'MiniMax M3', enabled: true },
   { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true },
+  { id: 'deepseek-flash', name: 'DeepSeek Flash', enabled: true },
   { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', enabled: true },
 ]
 
@@ -111,6 +119,17 @@ const PRESET_MODEL_CANDIDATE_UPDATES: readonly {
     to: string
   }[]>>
 }[] = [
+  {
+    id: 'deepseek-flash-v1',
+    candidates: {
+      deepseek: [
+        { id: 'deepseek-flash', name: 'DeepSeek Flash', enabled: false },
+      ],
+      'ark-coding-plan': [
+        { id: 'deepseek-flash', name: 'DeepSeek Flash', enabled: false },
+      ],
+    },
+  },
   {
     id: 'model-candidates-v3',
     candidates: {
@@ -661,6 +680,58 @@ export async function resolveCodexAccessToken(channelId: string): Promise<string
   return (await resolveCodexOAuthCredentials(channelId)).access
 }
 
+/** 同一 GitHub Copilot 渠道的 refresh 去重。 */
+const inflightGithubCopilotRefresh = new Map<string, Promise<GithubCopilotOAuthCredentials>>()
+
+/**
+ * 条件回写刷新凭据：当前渠道仍是启动时的凭据才更新。
+ *
+ * 该操作没有 await，因此同一运行时的回调会在 JavaScript 事件循环中顺序执行；
+ * 重新登录后旧会话的快照不再匹配，无法覆盖新账号。
+ */
+export function persistGithubCopilotOAuthCredentials(
+  channelId: string,
+  credentials: GithubCopilotOAuthCredentials,
+  expectedCredentials: GithubCopilotOAuthCredentials,
+): boolean {
+  const channel = getChannelById(channelId)
+  if (!channel || channel.provider !== 'github-copilot') {
+    throw new Error(`GitHub Copilot 渠道不存在或类型不匹配: ${channelId}`)
+  }
+  const current = parseGithubCopilotCredentials(decryptKey(channel.apiKey))
+  if (!current || serializeGithubCopilotCredentials(current) !== serializeGithubCopilotCredentials(expectedCredentials)) {
+    console.info(`[GitHub Copilot OAuth] 已忽略过期凭据回写: ${channelId}`)
+    return false
+  }
+  updateChannel(channelId, { apiKey: serializeGithubCopilotCredentials(credentials) })
+  return true
+}
+
+/** 解析渠道存储的 GitHub Copilot 凭据，按需刷新并条件回写。 */
+export async function resolveGithubCopilotOAuthCredentials(channelId: string): Promise<GithubCopilotOAuthCredentials> {
+  const channel = getChannelById(channelId)
+  if (!channel || channel.provider !== 'github-copilot') {
+    throw new Error('GitHub Copilot 渠道不存在或类型不匹配')
+  }
+  const credentials = parseGithubCopilotCredentials(decryptKey(channel.apiKey))
+  if (!credentials) throw new Error('GitHub Copilot 登录凭据无效或缺失，请重新登录')
+  if (!isGithubCopilotCredentialExpired(credentials)) return credentials
+
+  const existing = inflightGithubCopilotRefresh.get(channelId)
+  if (existing) return existing
+  const refreshPromise = (async (): Promise<GithubCopilotOAuthCredentials> => {
+    try {
+      const refreshed = await refreshGithubCopilotOAuth(credentials)
+      persistGithubCopilotOAuthCredentials(channelId, refreshed, credentials)
+      return refreshed
+    } finally {
+      inflightGithubCopilotRefresh.delete(channelId)
+    }
+  })()
+  inflightGithubCopilotRefresh.set(channelId, refreshPromise)
+  return refreshPromise
+}
+
 /** 保存 Pi 或 Proma 刷新后的完整 xAI OAuth 凭据。 */
 export function persistXaiOAuthCredentials(channelId: string, credentials: XaiOAuthCredentials): void {
   const channel = getChannelById(channelId)
@@ -710,6 +781,7 @@ export async function resolveChannelRuntimeApiKey(channelId: string): Promise<st
   }
 
   if (channel.provider === 'openai-codex') return resolveCodexAccessToken(channelId)
+  if (channel.provider === 'github-copilot') return (await resolveGithubCopilotOAuthCredentials(channelId)).access
   if (channel.provider === 'xai') return resolveXaiAccessToken(channelId)
   return decryptApiKey(channelId)
 }
@@ -1664,7 +1736,6 @@ export async function getChannelPlanQuota(channelId: string): Promise<ChannelPla
   } catch {
     provider = channel.provider
   }
-  const proxyUrl = await getEffectiveProxyUrl()
   let apiKey: string
   try {
     apiKey = decryptKey(channel.apiKey)
@@ -1673,6 +1744,10 @@ export async function getChannelPlanQuota(channelId: string): Promise<ChannelPla
   }
 
   try {
+    const proxyUrl = await getEffectiveProxyUrl()
+    if (provider === 'github-copilot') {
+      return await queryGithubCopilotPlanQuota(apiKey, proxyUrl)
+    }
     if (provider === 'openai-codex') {
       return await queryCodexPlanQuota(channelId, apiKey, proxyUrl)
     }
@@ -1690,7 +1765,9 @@ export async function getChannelPlanQuota(channelId: string): Promise<ChannelPla
     }
     return createUnsupportedPlanQuota(provider, '当前渠道不支持订阅 Plan 额度查询')
   } catch (error) {
-    const message = error instanceof Error ? error.message : '订阅额度查询失败'
+    const message = provider === 'github-copilot'
+      ? 'GitHub Copilot 额度查询失败，请检查网络或代理后重试'
+      : error instanceof Error ? error.message : '订阅额度查询失败'
     return createUnsupportedPlanQuota(provider, message)
   }
 }
@@ -1818,6 +1895,7 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
       case 'qwen-anthropic':
       case 'qwen-token-plan':
       case 'openai-codex':
+      case 'github-copilot':
       case 'xai':
         if (provider === 'openai-codex') {
           // ChatGPT (Codex) 走 Pi SDK 内置模型目录，不依赖 baseUrl/apiKey。
@@ -1826,6 +1904,16 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
             success: true,
             message: `已加载 ${codexModels.length} 个 ChatGPT (Codex) 模型`,
             models: codexModels.map((m) => ({ id: m.id, name: m.name, enabled: true, source: 'fetched' as const })),
+          }
+        }
+        if (provider === 'github-copilot') {
+          const credentials = parseGithubCopilotCredentials(input.apiKey)
+          if (!credentials) throw new Error('GitHub Copilot 登录凭据无效，请重新登录')
+          const copilotModels = await listGithubCopilotModels(credentials)
+          return {
+            success: true,
+            message: `已加载 ${copilotModels.length} 个 GitHub Copilot 可用模型`,
+            models: copilotModels.map((m) => ({ id: m.id, name: m.name, enabled: true, source: 'fetched' as const })),
           }
         }
         if (provider === 'xai') {
