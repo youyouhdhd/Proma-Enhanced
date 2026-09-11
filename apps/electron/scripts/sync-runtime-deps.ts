@@ -58,8 +58,8 @@ export const EXTERNAL_RUNTIME_PACKAGES: readonly string[] = [
 const appDir = resolve(import.meta.dir, '..')
 const repoRoot = resolve(appDir, '../..')
 const repoNodeModules = join(repoRoot, 'node_modules')
-const bunVirtualNodeModules = join(repoNodeModules, '.bun', 'node_modules')
-const defaultSourceNodeModules = existsSync(bunVirtualNodeModules) ? bunVirtualNodeModules : repoNodeModules
+// 仓库固定使用 hoisted；旧 .bun/node_modules 可能残留其它版本，不能覆盖当前依赖。
+const defaultSourceNodeModules = repoNodeModules
 const defaultTargetNodeModules = join(appDir, 'node_modules')
 
 function getPackageDir(nodeModulesDir: string, packageName: string): string {
@@ -100,7 +100,7 @@ function resolvePackageSourceDir(ctx: SyncContext, packageName: string, resolveF
     if (parentResolvedDir) return parentResolvedDir
   }
 
-  for (const nodeModulesDir of [ctx.sourceNodeModules, bunVirtualNodeModules, repoNodeModules]) {
+  for (const nodeModulesDir of [ctx.sourceNodeModules, repoNodeModules]) {
     const resolvedPackageDir = resolvePackageFromNodeModules(nodeModulesDir, packageName)
     if (resolvedPackageDir) return resolvedPackageDir
   }
