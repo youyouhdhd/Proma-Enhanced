@@ -8,15 +8,13 @@ import type {
   GitHubRelease,
   GitHubReleaseListOptions,
 } from '@proma/shared'
+import { rcompare, valid } from 'semver'
 
 /** GitHub API 基础 URL */
 const GITHUB_API_BASE = 'https://api.github.com'
 
-/** GitHub 仓库配置（从 electron-builder.yml） */
-const GITHUB_REPO = {
-  owner: 'ErlichLiu',
-  repo: 'Proma',
-}
+/** Enhanced Fork 的更新与发布历史必须来自自身仓库。 */
+export const GITHUB_REPO = { owner: 'youyouhdhd', repo: 'Proma-Enhanced' } as const
 
 /** Release 缓存 */
 interface ReleaseCache {
@@ -34,6 +32,29 @@ const CACHE_TTL = 30 * 60 * 1000
 
 /** Rate limit 冷却标记 */
 let rateLimitUntil = 0
+
+function releaseVersion(tag: string): string | null {
+  return valid(tag.replace(/^v/, ''))
+}
+
+/** 过滤不可见版本后按 SemVer 降序；异常标签最后按发布时间排列。 */
+export function selectReleases(
+  releases: readonly GitHubRelease[],
+  includePrerelease: boolean,
+  limit: number,
+): GitHubRelease[] {
+  return releases
+    .filter(release => !release.draft && (includePrerelease || !release.prerelease))
+    .toSorted((left, right) => {
+      const leftVersion = releaseVersion(left.tag_name)
+      const rightVersion = releaseVersion(right.tag_name)
+      if (leftVersion && rightVersion) return rcompare(leftVersion, rightVersion)
+      if (leftVersion) return -1
+      if (rightVersion) return 1
+      return Date.parse(right.published_at) - Date.parse(left.published_at)
+    })
+    .slice(0, limit)
+}
 
 /**
  * 从 GitHub API 获取 releases
@@ -81,7 +102,7 @@ async function fetchFromGitHub<T>(endpoint: string): Promise<T> {
 export async function getLatestRelease(): Promise<GitHubRelease | null> {
   try {
     const release = await fetchFromGitHub<GitHubRelease>('/releases/latest')
-    console.log(`[GitHub Release] 获取最新 Release: v${release.tag_name}`)
+    console.log(`[GitHub Release] 获取最新 Release: ${release.tag_name}`)
     return release
   } catch (error) {
     console.error('[GitHub Release] 获取最新 Release 失败:', error)
@@ -112,15 +133,13 @@ export async function listReleases(
       page === 1
     ) {
       console.log('[GitHub Release] 使用缓存的 Release 列表')
-      const filtered = includePrerelease
-        ? releaseCache.data
-        : releaseCache.data.filter(r => !r.prerelease && !r.draft)
-      return filtered.slice(0, perPage)
+      return selectReleases(releaseCache.data, includePrerelease, perPage)
     }
 
     // 构建查询参数
     const params = new URLSearchParams({
-      per_page: String(perPage),
+      // 首页面先取得足够候选，再过滤预发布版本，避免请求 3 条却只显示 1–2 条。
+      per_page: String(page === 1 ? 100 : perPage),
       page: String(page),
     })
 
@@ -131,10 +150,6 @@ export async function listReleases(
     console.log(`[GitHub Release] 获取到 ${releases.length} 个 Releases`)
 
     // 过滤草稿和预发布版本（如果需要）
-    const filtered = includePrerelease
-      ? releases
-      : releases.filter(r => !r.prerelease && !r.draft)
-
     // 更新缓存（仅第一页）
     if (page === 1) {
       releaseCache = {
@@ -143,16 +158,13 @@ export async function listReleases(
       }
     }
 
-    return filtered
+    return selectReleases(releases, includePrerelease, perPage)
   } catch (error) {
     console.error('[GitHub Release] 获取 Release 列表失败:', error)
     // 如果有缓存，即使过期也返回
     if (releaseCache) {
       console.log('[GitHub Release] API 请求失败，使用过期缓存')
-      const filtered = includePrerelease
-        ? releaseCache.data
-        : releaseCache.data.filter(r => !r.prerelease && !r.draft)
-      return filtered.slice(0, perPage)
+      return selectReleases(releaseCache.data, includePrerelease, perPage)
     }
     // 没有缓存时抛出异常，让前端知道加载失败
     throw error instanceof Error ? error : new Error(String(error))

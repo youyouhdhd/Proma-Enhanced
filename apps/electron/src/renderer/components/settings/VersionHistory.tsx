@@ -15,6 +15,7 @@ import { SettingsCard } from './primitives'
  */
 export function VersionHistory(): React.ReactElement {
   const [releases, setReleases] = React.useState<GitHubRelease[]>([])
+  const [latestTag, setLatestTag] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [expandedIds, setExpandedIds] = React.useState<Set<number>>(new Set())
@@ -25,11 +26,12 @@ export function VersionHistory(): React.ReactElement {
     setError(null)
 
     try {
-      const data = await window.electronAPI.listReleases({
-        perPage: 3,
-        includePrerelease: false,
-      })
+      const [data, latest] = await Promise.all([
+        window.electronAPI.listReleases({ perPage: 3, includePrerelease: false }),
+        window.electronAPI.getLatestRelease(),
+      ])
       setReleases(data)
+      setLatestTag(latest?.tag_name ?? data[0]?.tag_name ?? null)
     } catch (err) {
       console.error('[版本历史] 加载失败:', err)
       let errorMessage = err instanceof Error ? err.message : '加载失败'
@@ -101,9 +103,9 @@ export function VersionHistory(): React.ReactElement {
             <p className="text-sm text-muted-foreground">暂无版本历史</p>
           </div>
         ) : (
-          releases.map((release, index) => {
+          releases.map((release) => {
             const isExpanded = expandedIds.has(release.id)
-            const isLatest = index === 0
+            const isLatest = release.tag_name === latestTag
 
             return (
               <div key={release.id} className="p-4">

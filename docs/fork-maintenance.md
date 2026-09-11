@@ -1,12 +1,19 @@
 # Proma Fork 维护与上游同步指南
 
-记录版本：0.1.9
+记录版本：0.1.10
 最后核对：2026-09-11
 适用对象：维护 `youyouhdhd/Proma-Enhanced` Fork（官方上游 `proma-ai/Proma`）的开发者
 
 本文的目标是让维护者在 `proma-ai/Proma` 发布新版本后，能够先取得上游更新，再有边界地重放本 Fork 的定制功能。它记录当前仓库的真实分叉状态、定制提交和已知冲突区域；不把上游代码复制成第二份，也不建议直接在 `main` 上试错。
 
 ## 当前仓库状态
+
+### 2026-09-11：v1.12.2 Release 历史修复
+
+- Enhanced 客户端的 GitHub Release 服务和下载入口统一指向 `youyouhdhd/Proma-Enhanced`。
+- Release 列表先过滤草稿/预发布，再按 SemVer 降序；最新标记使用 GitHub Latest Release。
+- `v1.10.0`、`v1.9.0` 两个过期草稿 Release 已删除，Git Tag 保留；公开 Release 列表现按版本从大到小排列。
+- Electron 版本递增为 1.12.2，shared 保持 0.7.0，发布说明见 [v1.12.2](../release-notes/v1.12.2.md)。
 
 ### 2026-09-11：v1.12.1 发布
 
