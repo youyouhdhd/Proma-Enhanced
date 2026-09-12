@@ -8,12 +8,12 @@
 
 ## 当前仓库状态
 
-### 2026-09-13：v1.13.1 ChatGPT 能力发现与 Agent 动作委派安全修复
+### 2026-09-13：v1.13.2 ChatGPT 能力发现与 Agent 队列安全修复
 
 - MCP Discovery / initialize 增加服务级 `instructions`，明确可见工具、`workspace_list` 权限预检，以及 Direct Tool 与 PROMA Agent Delegation 的区别。
 - 工具 metadata 增加 title、output schema 和安全 annotations；Discovery fingerprint 现在包含 instructions，能力说明变化会提示 ChatGPT Refresh。
 - 共享配置升级到 v3；旧配置默认保持 Agent 只读分析。新增 Agent 动作模式支持本地审批或高级 Direct，任务绑定单一 Workspace 并逐次重新授权。
-- v1.13.1 修复 Direct 与 Agent 动作执行租约的来源隔离；Electron 版本 1.13.1，shared 0.8.1。实现和验收细节见 [v1.13.1 发布说明](../release-notes/v1.13.1.md)、[v1.13.0 功能说明](../release-notes/v1.13.0.md) 与 [V14 开发文档](../specdoc/Proma-Enhanced-V14-ChatGPT-Capability-Awareness-Agent-Action-Delegation-Development-Guide.md)。
+- v1.13.1 修复 Direct 与 Agent 动作执行租约的来源隔离；v1.13.2 修复 `maxQueued=0` 未计算待审批任务。Electron 版本 1.13.2，shared 0.8.1。实现和验收细节见 [v1.13.2 发布说明](../release-notes/v1.13.2.md)、[v1.13.1](../release-notes/v1.13.1.md)、[v1.13.0 功能说明](../release-notes/v1.13.0.md) 与 [V14 开发文档](../specdoc/Proma-Enhanced-V14-ChatGPT-Capability-Awareness-Agent-Action-Delegation-Development-Guide.md)。
 
 ### 2026-09-11：v1.12.2 Release 历史修复
 

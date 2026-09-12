@@ -95,8 +95,9 @@ export class AnalysisTaskQueue {
     if (duplicate && this.tasks.get(duplicate.id)?.status === 'completed') return this.get(duplicate.id)
     while (this.starts.length && this.starts[0]! < now - 60_000) this.starts.shift()
     const limits = this.limits()
-    if (limits.maxQueued === 0 && this.active.size + [...this.tasks.values()].filter((task) => task.status === 'queued').length >= limits.maxConcurrent) throw new Error('BUSY')
-    if (this.starts.length >= 6 || [...this.tasks.values()].filter((task) => task.status === 'queued').length >= limits.maxQueued + Math.max(0, limits.maxConcurrent - this.active.size)) throw new Error('TASK_RATE_LIMIT')
+    const pendingCount = [...this.tasks.values()].filter((task) => ['queued', 'planning', 'running', 'waiting_approval'].includes(task.status)).length
+    if (limits.maxQueued === 0 && pendingCount >= limits.maxConcurrent) throw new Error('BUSY')
+    if (this.starts.length >= 6 || pendingCount >= limits.maxQueued + limits.maxConcurrent) throw new Error('TASK_RATE_LIMIT')
     const task: McpRemoteTask = {
       id: 'pt_' + randomBytes(16).toString('hex'),
       workspaceId,

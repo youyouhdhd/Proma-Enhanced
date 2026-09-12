@@ -61,3 +61,11 @@ it('Given Agent 动作需要审批 When 计划完成并在本地批准 Then 才�
   expect(queue.get(task.id)).toMatchObject({ status: 'completed', changed_files: ['README.md'], approval: { decision: 'approved' } })
   expect(calls).toEqual([{ approved: false }, { approved: true }])
 })
+
+it('Given maxQueued=0 When 一个动作等待本地审批 Then 不允许继续堆积等待任务', async () => {
+  const queue = new AnalysisTaskQueue({ run: async () => ({ summary: '待审批计划', waitingApproval: true }) }, () => undefined, () => undefined, [], () => ({ maxConcurrent: 1, maxQueued: 0 }))
+  const first = queue.start('ws_agent', 'first action', undefined, 'action', true)
+  await tick()
+  expect(queue.get(first.id).status).toBe('waiting_approval')
+  expect(() => queue.start('ws_agent', 'second action', undefined, 'action', true)).toThrow('BUSY')
+})
