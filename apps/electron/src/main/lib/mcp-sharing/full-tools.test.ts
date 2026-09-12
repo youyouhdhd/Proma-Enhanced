@@ -48,3 +48,19 @@ it('Given 远程执行额度 When 并发/撤销/迁移 Then 单Shell并发且旧
   guard.revoke(); expect(lease.signal.aborted).toBe(true); lease.release()
   expect(normalizeSharing({ version: 1, roots: [], policy: { write: 'direct', execute: 'direct' } }).policy.write).toBe('disabled')
 })
+
+it('Given Direct 与 Agent 动作共用执行守卫 When 只关闭其中一方策略 Then 只撤销对应来源的租约', () => {
+  const root = { id: 'one', name: 'one', rootPath: process.cwd(), enabled: true, agentWorkspaceId: 'agent-one', permissions: { read: true, write: true, shell: true } }
+  const guard = new RemoteExecutionGuard()
+  const config = normalizeSharing({ version: 3, enabled: true, roots: [], tools: { fileRead: true, fileWrite: true, shell: true, search: true, git: true }, policy: { read: 'direct', write: 'disabled', execute: 'disabled' }, delegation: { enabled: true, action: { mode: 'direct', write: true, execute: false } } })
+  const direct = guard.acquire('write', root.id, config, 'direct')
+  const agent = guard.acquire('write', root.id, config, 'agent')
+  const directDisabled = { ...config, policy: { ...config.policy, write: 'disabled' as const } }
+  guard.reconcile([root], directDisabled)
+  expect(direct.signal.aborted).toBe(true)
+  expect(agent.signal.aborted).toBe(false)
+  const agentDisabled = { ...directDisabled, delegation: { ...directDisabled.delegation, action: { mode: 'analysis' as const, write: false, execute: false } } }
+  guard.reconcile([root], agentDisabled)
+  expect(agent.signal.aborted).toBe(true)
+  direct.release(); agent.release()
+})

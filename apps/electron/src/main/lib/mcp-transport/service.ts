@@ -98,7 +98,7 @@ class McpTransportService {
     return createPrimitiveCatalog(() => { const config = mcpSharingStore.get(); const action = config.delegation.action; return forAgent ? { ...config, policy: { read: 'direct', write: agentKind === 'action' && action?.write ? 'direct' : 'disabled', execute: agentKind === 'action' && action?.execute ? 'direct' : 'disabled' } } : config }, () => mcpSharingStore.entries(scope()), (id) => {
       const entry = mcpSharingStore.entries(scope()).find((e) => e.id === id && e.enabled)
       return entry ? { entry, context: { workspaceId: id, rootPath: entry.rootPath } } : { error: '共享目录不可用或权限已撤销' }
-    }, true, this.executionGuard)
+    }, true, this.executionGuard, forAgent ? 'agent' : 'direct')
   }
   async saveSharing(value: unknown): Promise<McpSharingConfig> {
     const next = normalizeSharing(value)

@@ -109,6 +109,7 @@ export function createPrimitiveCatalog(
   resolve: WorkspaceContextResolver,
   remote = true,
   guard = new RemoteExecutionGuard(),
+  origin: 'direct' | 'agent' = 'direct',
 ): McpToolHandlers {
   const registry = createDefaultLocalToolRegistry()
   const primitive = (signal?: AbortSignal) => createConfiguredTools({
@@ -135,7 +136,7 @@ export function createPrimitiveCatalog(
     if (!canCallTool(level, target.entry, config())) return errorResult('项目未授权此能力', 'PERMISSION_DENIED')
     let lease: ReturnType<RemoteExecutionGuard['acquire']> | undefined
     try {
-      lease = guard.acquire(level, target.entry.id, config())
+      lease = guard.acquire(level, target.entry.id, config(), origin)
       return await primitive(lease.signal).call(name, args)
     } catch (error) {
       return errorResult(error instanceof Error ? error.message : '远程操作失败')
