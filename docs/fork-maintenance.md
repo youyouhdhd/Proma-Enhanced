@@ -1,12 +1,19 @@
 # Proma Fork 维护与上游同步指南
 
-记录版本：0.1.10
-最后核对：2026-09-11
+记录版本：0.1.11
+最后核对：2026-09-13
 适用对象：维护 `youyouhdhd/Proma-Enhanced` Fork（官方上游 `proma-ai/Proma`）的开发者
 
 本文的目标是让维护者在 `proma-ai/Proma` 发布新版本后，能够先取得上游更新，再有边界地重放本 Fork 的定制功能。它记录当前仓库的真实分叉状态、定制提交和已知冲突区域；不把上游代码复制成第二份，也不建议直接在 `main` 上试错。
 
 ## 当前仓库状态
+
+### 2026-09-13：v1.13.0 ChatGPT 能力发现与 Agent 动作委派
+
+- MCP Discovery / initialize 增加服务级 `instructions`，明确可见工具、`workspace_list` 权限预检，以及 Direct Tool 与 PROMA Agent Delegation 的区别。
+- 工具 metadata 增加 title、output schema 和安全 annotations；Discovery fingerprint 现在包含 instructions，能力说明变化会提示 ChatGPT Refresh。
+- 共享配置升级到 v3；旧配置默认保持 Agent 只读分析。新增 Agent 动作模式支持本地审批或高级 Direct，任务绑定单一 Workspace 并逐次重新授权。
+- Electron 版本 1.13.0，shared 0.8.0；实现和验收细节见 [v1.13.0 发布说明](../release-notes/v1.13.0.md) 与 [V14 开发文档](../specdoc/Proma-Enhanced-V14-ChatGPT-Capability-Awareness-Agent-Action-Delegation-Development-Guide.md)。
 
 ### 2026-09-11：v1.12.2 Release 历史修复
 

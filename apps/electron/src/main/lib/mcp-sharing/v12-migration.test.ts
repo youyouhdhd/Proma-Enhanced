@@ -8,9 +8,10 @@ import { shareFolderIdentity } from './roots'
 
 it('Given V11配置 When 迁移 Then 保留单目标/域名且不扩大写入执行权限', () => {
   const sharing = normalizeSharing({ version: 1, roots: [], enabled: true, delegation: { enabled: true, channelId: 'channel', modelId: 'model' } })
-  expect(sharing.version).toBe(2)
+  expect(sharing.version).toBe(3)
   expect(sharing.delegation.targets[0]?.channelId).toBe('channel')
   expect(sharing.policy).toEqual({ read: 'direct', write: 'disabled', execute: 'disabled' })
+  expect(sharing.delegation.action).toEqual({ mode: 'analysis', write: false, execute: false })
   const old = { version: 2, provider: 'ngrok', providers: { ngrok: { hostname: 'https://stable.ngrok.app' } } }
   expect(normalizeRemoteConfig(old, true).providers.ngrok?.authSource).toBe('proma-secret')
   expect(normalizeRemoteConfig(old, false).providers.ngrok?.authSource).toBe('system-config')

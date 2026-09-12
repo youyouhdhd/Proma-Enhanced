@@ -50,7 +50,9 @@ it('Given 内部 full workspace When 通过 Public Ingress Then 只读、Secret�
     enabled = false
     expect((await client.callTool({ name: 'read_file', arguments: { path: 'README.md' } })).isError).toBe(true)
     enabled = true
-    expect((await probePublicMcp(endpoint, 'probe-marker')).toolCount).toBe(11)
+    const probe = await probePublicMcp(endpoint, 'probe-marker')
+    expect(probe.toolCount).toBe(11)
+    expect(probe.instructions).toBe(true)
     expect(ingress.getRequests().some((t) => t.probe)).toBe(true)
     expect(JSON.stringify(ingress.getRequests())).not.toContain(secret)
     secret = randomBytes(32).toString('base64url')

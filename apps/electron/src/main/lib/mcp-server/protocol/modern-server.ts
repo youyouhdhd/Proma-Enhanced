@@ -3,6 +3,7 @@ import { createMcpHandler, Server, isSpecType, type Tool, type CallToolResult } 
 import { toNodeHandler } from '@modelcontextprotocol/node'
 import { version } from '../../../../../package.json'
 import type { McpToolView } from '../tool-adapter'
+import { PROMA_MCP_INSTRUCTIONS } from './server-instructions'
 
 export const MCP_SERVER_INFO = { name: 'Proma MCP', version }
 // SDK 的 LATEST_PROTOCOL_VERSION 为兼容旧握手仍指向 2025；显式选择已验证的现代版本。
@@ -13,6 +14,10 @@ export interface McpToolHandlers {
   call(name: string, args: Record<string, unknown>): Promise<CallToolResult>
 }
 
+export interface ModernServerOptions {
+  instructions?: string
+}
+
 export function validatedTools(handlers: McpToolHandlers): Tool[] {
   return handlers.list().map((view) => {
     if (!isSpecType.Tool(view)) throw new Error('MCP 工具 schema 不符合官方规范: ' + view.name)
@@ -20,9 +25,12 @@ export function validatedTools(handlers: McpToolHandlers): Tool[] {
   })
 }
 
-export function createModernServer(handlers: McpToolHandlers) {
+export function createModernServer(handlers: McpToolHandlers, options: ModernServerOptions = {}) {
   const handler = createMcpHandler(() => {
-    const server = new Server(MCP_SERVER_INFO, { capabilities: { tools: {} } })
+    const server = new Server(MCP_SERVER_INFO, {
+      capabilities: { tools: {} },
+      instructions: options.instructions ?? PROMA_MCP_INSTRUCTIONS,
+    })
     server.setRequestHandler('tools/list', () => ({ tools: validatedTools(handlers) }))
     server.setRequestHandler('tools/call', (request) => handlers.call(request.params.name, request.params.arguments ?? {}))
     return server

@@ -43,3 +43,21 @@ it('Given 持久化中的运行任务 When 重启恢复 Then 标记中断且不�
   expect(queue.snapshot()[0]?.status).toBe('failed')
   expect(calls).toBe(0)
 })
+
+it('Given Agent 动作需要审批 When 计划完成并在本地批准 Then 才进入动作执行', async () => {
+  const calls: Array<{ approved: boolean }> = []
+  const queue = new AnalysisTaskQueue({
+    run: async (_id, _instruction, _signal, _bind, _target, _audit, options) => {
+      calls.push({ approved: options?.approved === true })
+      return options?.approved ? { summary: '动作完成', changedFiles: ['README.md'] } : { summary: '计划已生成', waitingApproval: true }
+    },
+  }, () => undefined)
+  const task = queue.start('ws_agent', 'modify', undefined, 'action', true)
+  await tick()
+  expect(queue.get(task.id).status).toBe('waiting_approval')
+  expect(calls).toEqual([{ approved: false }])
+  queue.approve(task.id)
+  await tick()
+  expect(queue.get(task.id)).toMatchObject({ status: 'completed', changed_files: ['README.md'], approval: { decision: 'approved' } })
+  expect(calls).toEqual([{ approved: false }, { approved: true }])
+})

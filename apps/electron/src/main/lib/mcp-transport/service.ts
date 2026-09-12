@@ -2,7 +2,7 @@ import { clipboard, safeStorage } from 'electron'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes, createHash } from 'node:crypto'
-import type { McpTransportStatus, McpTransportKind, PromaRemoteAccessConfig, McpTransportDiagnostic, McpSharingConfig } from '@proma/shared'
+import type { McpAgentActionMode, McpTransportStatus, McpTransportKind, PromaRemoteAccessConfig, McpTransportDiagnostic, McpSharingConfig } from '@proma/shared'
 import { getConfigDir } from '../config-paths'
 import { writeJsonFileAtomic, readJsonFileSafe } from '../safe-file'
 import { promaMcpServerService } from '../mcp-server/service'
@@ -19,9 +19,11 @@ import type { McpTransportProvider } from './types'
 import { mcpSharingStore } from '../mcp-sharing/store'
 import { createPrimitiveCatalog, withDelegation, toolFingerprint } from '../mcp-sharing/catalog'
 import { createDelegationQueue, validateDelegationTargets } from '../mcp-sharing/delegation'
+import type { McpTaskKind } from '../mcp-sharing/task-queue'
 import type { McpToolHandlers } from '../mcp-server/protocol/modern-server'
 import { normalizeSharing } from '../mcp-sharing/config'
 import { RemoteExecutionGuard } from '../mcp-sharing/tool-policy'
+import { PROMA_MCP_MANIFEST_VERSION } from '../mcp-server/protocol/server-instructions'
 
 class OpenAiSecureProvider implements McpTransportProvider {
   readonly kind = 'openai-secure' as const
@@ -58,10 +60,26 @@ class McpTransportService {
   private urlChanged = false
   private readonly listeners = new Set<(kind: 'config' | 'status' | 'sharing') => void>()
   private readonly executionGuard = new RemoteExecutionGuard()
-  private readonly queue = createDelegationQueue((id) => this.primitive(() => [id], true), (id) => this.scope().includes(id), () => this.emit('sharing'))
+  private agentReadiness: { state: 'ready' | 'unavailable' | 'unknown'; readyCount: number; checkedAt?: number } = { state: 'unknown', readyCount: 0 }
+  private readonly queue = createDelegationQueue((id, kind) => this.primitive(() => [id], true, kind), (id) => this.scope().includes(id), () => this.emit('sharing'))
   private readonly catalog = withDelegation(this.primitive(() => this.scope()), () => {
     const sharing = mcpSharingStore.get(); return sharing.enabled && sharing.delegation.enabled
-  }, this.queue)
+  }, this.queue, {
+    config: () => mcpSharingStore.get(),
+    entries: () => mcpSharingStore.entries(this.scope()),
+    actionMode: () => mcpSharingStore.get().delegation.action?.mode ?? 'analysis' as McpAgentActionMode,
+    actionToolsEnabled: () => {
+      const sharing = mcpSharingStore.get()
+      const action = sharing.delegation.action
+      return action?.mode !== 'analysis' && (action?.write === true && sharing.tools.fileWrite || action?.execute === true && sharing.tools.shell)
+    },
+    actionExecuteEnabled: () => {
+      const sharing = mcpSharingStore.get()
+      const action = sharing.delegation.action
+      return action?.mode !== 'analysis' && action?.execute === true && sharing.tools.shell
+    },
+    agentReadiness: () => this.agentReadiness,
+  })
   constructor() {
     mcpSharingStore.onChanged(() => { this.queue.reconcile(); this.executionGuard.reconcile(mcpSharingStore.entries(this.scope()), mcpSharingStore.get()); void promaMcpServerService.syncSharing().catch(() => undefined); this.impact = 'hot'; this.emit('sharing'); this.emit('status') })
     mcpTunnelService.onStateChanged(() => { if (this.runtime?.provider === 'openai-secure') this.emit('status') })
@@ -76,17 +94,24 @@ class McpTransportService {
     const remote = this.getConfig(); const sharing = mcpSharingStore.get()
     return sharing.roots.filter((r) => r.enabled && (remote.publicIngress.scopeMode === 'inherit' || remote.publicIngress.workspaceIds.includes(r.id))).map((r) => r.id)
   }
-  private primitive(scope: () => string[], forAgent = false): McpToolHandlers {
-    return createPrimitiveCatalog(() => { const config = mcpSharingStore.get(); return forAgent ? { ...config, policy: { read: 'direct', write: 'disabled', execute: 'disabled' } } : config }, () => mcpSharingStore.entries(scope()), (id) => {
+  private primitive(scope: () => string[], forAgent = false, agentKind: McpTaskKind = 'analysis'): McpToolHandlers {
+    return createPrimitiveCatalog(() => { const config = mcpSharingStore.get(); const action = config.delegation.action; return forAgent ? { ...config, policy: { read: 'direct', write: agentKind === 'action' && action?.write ? 'direct' : 'disabled', execute: agentKind === 'action' && action?.execute ? 'direct' : 'disabled' } } : config }, () => mcpSharingStore.entries(scope()), (id) => {
       const entry = mcpSharingStore.entries(scope()).find((e) => e.id === id && e.enabled)
       return entry ? { entry, context: { workspaceId: id, rootPath: entry.rootPath } } : { error: '共享目录不可用或权限已撤销' }
     }, true, this.executionGuard)
   }
   async saveSharing(value: unknown): Promise<McpSharingConfig> {
     const next = normalizeSharing(value)
-    if (next.delegation.enabled && !(await validateDelegationTargets(next.delegation.targets)).some((item) => item.ready)) throw new Error('至少选择一个已授权可用的 Agent 模型')
+    let nextReadiness: McpTransportService['agentReadiness']
+    if (next.delegation.enabled) {
+      const targets = await validateDelegationTargets(next.delegation.targets)
+      const readyCount = targets.filter((target) => target.ready).length
+      if (!readyCount) throw new Error('至少选择一个已授权可用的 Agent 模型')
+      nextReadiness = { state: 'ready', readyCount, checkedAt: Date.now() }
+    } else nextReadiness = { state: 'unavailable', readyCount: 0, checkedAt: Date.now() }
     const old = mcpSharingStore.get()
     const saved = mcpSharingStore.save(next)
+    this.agentReadiness = nextReadiness
     if (!next.delegation.enabled) this.queue.cancelAll()
     return saved
   }
@@ -115,8 +140,10 @@ class McpTransportService {
           this.previousIdentity = identity
         }
       }
+      const discovery = toolFingerprint(this.catalog)
+      const confirmed = readJsonFileSafe<{ fingerprint?: string; version?: number }>(join(getConfigDir(), 'mcp-tool-schema-ack.json'))?.fingerprint
       return { ...status, requests: this.ingress?.getRequests() ?? [], restartRequired: this.restartRequired, applyImpact: this.impact,
-        toolSchemaFingerprint: toolFingerprint(this.catalog), confirmedToolSchemaFingerprint: readJsonFileSafe<{ fingerprint: string }>(join(getConfigDir(), 'mcp-tool-schema-ack.json'))?.fingerprint, connectorUrlFingerprint: identity ?? this.previousIdentity, urlChanged: this.urlChanged,
+        toolSchemaFingerprint: discovery, confirmedToolSchemaFingerprint: confirmed, discoveryManifestVersion: PROMA_MCP_MANIFEST_VERSION, discoveryFingerprint: discovery, confirmedDiscoveryFingerprint: confirmed, connectorUrlFingerprint: identity ?? this.previousIdentity, urlChanged: this.urlChanged,
         stableUrl: status.stableUrl ?? REMOTE_PROVIDERS.find((p) => p.kind === (this.runtime?.provider ?? config.provider))?.capabilities.stableUrl,
         secretConfigured: Boolean(this.secrets().read('connector')), tokenConfigured: config.provider === 'ngrok' ? Boolean(this.secrets().read('ngrok')) : config.provider === 'cloudflare-named' ? Boolean(this.secrets().read('cloudflare')) : config.provider === 'openai-secure' ? mcpTunnelService.getRuntimeKeyStatus() === 'available' : undefined }
     } catch { return { ...status, restartRequired: this.restartRequired, errorCode: 'TRANSPORT_SECRET_UNREADABLE', errorMessage: '凭据无法解密，请重新保存；不会静默更换 Secret。' } }
@@ -169,6 +196,7 @@ class McpTransportService {
     checks.push({ name: 'Provider Process / Connection', ok: ['ready', 'degraded'].includes(status.phase), detail: `状态 ${status.phase}，PID ${status.pid ?? '外部管理或未运行'}`, nextAction: '检查 Endpoint 所有权及 Provider 日志，然后启动连接' },
       { name: 'Public HTTPS', ok: status.probe?.modern === true && status.phase === 'ready', detail: status.endpoint?.publicUrl ?? '尚无已验证公网地址', nextAction: '检查专用 Domain、云端认证及网络状态' },
       { name: 'MCP Discovery', ok: status.probe?.modern === true, detail: status.probe?.modern ? 'Modern MCP 通过' : '未通过', nextAction: '确认公网转发到当前 PROMA 的 Remote Ingress' },
+      { name: 'Discovery Instructions', ok: status.probe?.instructions !== false, detail: status.probe?.instructions === false ? '未返回服务级能力说明' : '已返回或尚未单独探测', nextAction: '更新 PROMA 后在 ChatGPT Refresh / Scan Tools' },
       { name: 'tools/list', ok: (status.probe?.toolCount ?? 0) > 0, detail: `${status.probe?.toolCount ?? 0} 个已验证工具`, nextAction: '检查工具开关和共享内容' },
       { name: 'workspace_list', ok: status.probe?.workspaceList === true, detail: status.probe?.workspaceList ? '已通过' : '未验证或读取工具未开放', nextAction: '启用共享读取并检查项目可用性' })
     return { status, checks: checks.map((check) => ({ ...check, level: check.level ?? (check.ok ? 'pass' : 'fail'), nextAction: check.ok ? '无需操作' : check.nextAction })) }
@@ -206,10 +234,14 @@ class McpTransportService {
   tasks() { return this.queue.snapshot() }
   async validateTargets(value: unknown) {
     const config = normalizeSharing(value)
-    return (await validateDelegationTargets(config.delegation.targets)).map(({ target, ready, detail }) => ({ id: target.id, ready, detail }))
+    const targets = await validateDelegationTargets(config.delegation.targets)
+    this.agentReadiness = { state: targets.some((target) => target.ready) ? 'ready' : 'unavailable', readyCount: targets.filter((target) => target.ready).length, checkedAt: Date.now() }
+    return targets.map(({ target, ready, detail }) => ({ id: target.id, ready, detail }))
   }
   clearLogs(): void { this.provider?.clearLogs?.(); this.emit('status') }
   cancelTask(id: string) { this.queue.cancel(id) }
-  confirmToolSchema(): void { writeJsonFileAtomic(join(getConfigDir(), 'mcp-tool-schema-ack.json'), { fingerprint: toolFingerprint(this.catalog) }); this.emit('status') }
+  approveTask(id: string) { return this.queue.approve(id) }
+  denyTask(id: string) { return this.queue.deny(id) }
+  confirmToolSchema(): void { writeJsonFileAtomic(join(getConfigDir(), 'mcp-tool-schema-ack.json'), { version: 2, fingerprint: toolFingerprint(this.catalog), confirmedAt: Date.now() }); this.emit('status') }
 }
 export const mcpTransportService = new McpTransportService()

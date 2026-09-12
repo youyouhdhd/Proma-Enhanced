@@ -17,6 +17,8 @@ export async function probePublicMcp(endpoint: string, marker: string, signal?: 
     if (!isSpecType.ListToolsResult(list) || !list.tools.length) throw new Error()
     const workspaceList = list.tools.some((t) => t.name === 'workspace_list')
     if (workspaceList && (await client.callTool({ name: 'workspace_list', arguments: {} })).isError) throw new Error()
-    return { modern: true, toolCount: list.tools.length, workspaceList }
+    const discover = client.getDiscoverResult()
+    const instructions = typeof discover?.instructions === 'string' && discover.instructions.trim().length > 0
+    return { modern: true, toolCount: list.tools.length, workspaceList, instructions }
   } catch { throw new Error(stage) } finally { await client.close().catch(() => undefined) }
 }

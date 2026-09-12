@@ -26,6 +26,8 @@ export interface WorkspaceDirectoryEntry {
   rootPath: string
   enabled: boolean
   permissions: PromaMcpWorkspacePermissions
+  /** 仅 PROMA Agent Workspace 有值；额外文件夹不能启动 PROMA Agent。 */
+  agentWorkspaceId?: string
 }
 
 // ===== 限制（规范 §37：防止一次调用把大量代码发给 ChatGPT） =====
@@ -38,9 +40,20 @@ const CROSS_SEARCH_MAX_RESULTS = 200
 
 export const workspaceListTool: Pick<LocalToolDefinition, 'name' | 'description' | 'inputSchema' | 'risk'> = {
   name: 'workspace_list',
-  description: '列出当前 MCP Gateway 暴露的全部授权项目（id、名称、Git 分支、权限）。跨仓库任务前先调用本工具获取 workspace_id。',
+  description: 'PROMA 能力与权限预检入口。首次处理 PROMA 项目、选择 workspace，或准备声称没有权限前必须调用；返回当前 endpoint 的授权项目、Git 分支、实时 read/write/shell 权限与 Agent 能力摘要。跨仓库任务前从此处获取 workspace_id。',
   inputSchema: { type: 'object', properties: {} },
   risk: 'read',
+}
+
+export const workspaceListOutputSchema: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    capabilities: { type: 'object', description: '当前连接的直接工具与 Agent 能力摘要' },
+    workspaces: { type: 'array', description: '当前 endpoint 范围内的工作区摘要' },
+    count: { type: 'integer' },
+  },
+  required: ['workspaces', 'count'],
+  additionalProperties: false,
 }
 
 export const workspaceOpenTool: Pick<LocalToolDefinition, 'name' | 'description' | 'inputSchema' | 'risk'> = {

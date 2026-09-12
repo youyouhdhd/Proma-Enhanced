@@ -21,3 +21,4 @@ export {
   type WorkspaceContextResolver,
 } from './multi-workspace'
 export { createDefaultLocalToolRegistry, LocalToolRegistry } from '../local-tools/registry'
+export { PROMA_MCP_INSTRUCTIONS, PROMA_MCP_MANIFEST_VERSION } from './protocol/server-instructions'

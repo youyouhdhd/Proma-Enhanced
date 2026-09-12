@@ -11,7 +11,13 @@ import type {
   AgentSendInput,
 } from '@proma/shared'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
-export interface HeadlessRunExtensions { piCustomTools?: ToolDefinition[]; analysisTools?: ToolDefinition[] }
+export interface HeadlessRunExtensions {
+  piCustomTools?: ToolDefinition[]
+  /** 受限只读工具；与 actionTools 二选一，由主进程可信调用方注入。 */
+  analysisTools?: ToolDefinition[]
+  /** 受限动作工具；仅通过已授权的 PROMA Agent Action 任务注入。 */
+  actionTools?: ToolDefinition[]
+}
 
 export interface HeadlessAgentRunCallbacks {
   onError: (error: string) => void

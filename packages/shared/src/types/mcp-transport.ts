@@ -47,7 +47,7 @@ export interface McpTransportStatus {
   errorCode?: string
   errorMessage?: string
   executableVersion?: string
-  probe?: { modern: boolean; toolCount: number; workspaceList: boolean }
+  probe?: { modern: boolean; toolCount: number; workspaceList: boolean; instructions?: boolean }
   tokenConfigured?: boolean
   secretConfigured?: boolean
   experimental?: boolean
@@ -55,6 +55,10 @@ export interface McpTransportStatus {
   applyImpact?: ApplyImpact
   toolSchemaFingerprint?: string
   confirmedToolSchemaFingerprint?: string
+  /** Discovery fingerprint 包含 instructions 与 tools/list metadata；旧字段保留兼容。 */
+  discoveryManifestVersion?: number
+  discoveryFingerprint?: string
+  confirmedDiscoveryFingerprint?: string
   connectorUrlFingerprint?: string
   urlChanged?: boolean
   stableUrl?: boolean

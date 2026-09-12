@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { SessionManager } from '../session-manager'
 import { MCP_SERVER_INFO, validatedTools, type McpToolHandlers } from './modern-server'
+import { PROMA_MCP_INSTRUCTIONS } from './server-instructions'
 
 export class LegacyMcpServer {
   readonly sessions = new SessionManager()
@@ -42,7 +43,7 @@ export class LegacyMcpServer {
       res.writeHead(405, { allow: 'POST' }).end()
       return
     }
-    const server = new Server(MCP_SERVER_INFO, { capabilities: { tools: {} } })
+    const server = new Server(MCP_SERVER_INFO, { capabilities: { tools: {} }, instructions: PROMA_MCP_INSTRUCTIONS })
     server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: validatedTools(handlers) }))
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const result = await handlers.call(request.params.name, request.params.arguments ?? {})

@@ -2030,6 +2030,14 @@ export function registerIpcHandlers(): void {
   })
   ipcMain.handle(MCP_SHARING_IPC.TASKS, () => mcpTransportService.tasks())
   ipcMain.handle(MCP_SHARING_IPC.CANCEL_TASK, (_, id: string) => mcpTransportService.cancelTask(id))
+  ipcMain.handle(MCP_SHARING_IPC.APPROVE_TASK, (_, id: string) => {
+    if (typeof id !== 'string' || !/^pt_[a-f0-9]{32}$/.test(id)) throw new Error('TASK_ID_INVALID')
+    return mcpTransportService.approveTask(id)
+  })
+  ipcMain.handle(MCP_SHARING_IPC.DENY_TASK, (_, id: string) => {
+    if (typeof id !== 'string' || !/^pt_[a-f0-9]{32}$/.test(id)) throw new Error('TASK_ID_INVALID')
+    return mcpTransportService.denyTask(id)
+  })
   let remoteNotifyTimer: ReturnType<typeof setTimeout> | undefined
   const changed = new Set<string>()
   mcpTransportService.onChanged((kind) => {

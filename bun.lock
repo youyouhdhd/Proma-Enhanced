@@ -37,7 +37,7 @@
     },
     "apps/electron": {
       "name": "@proma/electron",
-      "version": "1.12.2",
+      "version": "1.13.0",
       "dependencies": {
         "@codemirror/language": "^6.12.4",
         "@codemirror/state": "^6.7.1",
@@ -197,7 +197,7 @@
     },
     "packages/shared": {
       "name": "@proma/shared",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "devDependencies": {
         "typescript": "^5.0.0",
       },

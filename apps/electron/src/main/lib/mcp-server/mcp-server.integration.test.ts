@@ -380,6 +380,7 @@ describe('PromaMcpServer 多工作区集成', () => {
     if (!isSpecType.DiscoverResult(result)) throw new Error('官方 Discovery schema 不匹配')
     expect(result.supportedVersions).toContain(MODERN_PROTOCOL_VERSION)
     expect(result.capabilities.tools).toBeDefined()
+    expect(result.instructions).toContain('workspace_list')
   })
 
   it('TC-V7-DISCOVER-02：server/discover 成功后 stateless tools/list 仍可用', async () => {

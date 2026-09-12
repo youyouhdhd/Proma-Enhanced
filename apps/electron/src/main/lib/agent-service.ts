@@ -261,6 +261,8 @@ export interface AgentRunExtensions {
   piCustomTools?: ToolDefinition[]
   /** 仅受信 Main 调用可设置；独占只读工具，不能通过 IPC input 伪造。 */
   analysisTools?: ToolDefinition[]
+  /** 仅受信 Main 调用可设置；工具已经由 MCP Gateway 绑定并过滤。 */
+  actionTools?: ToolDefinition[]
 }
 
 /**
@@ -508,7 +510,7 @@ export async function runAgentHeadless(
       },
     }, extensions)
   } catch (err) {
-    console.error('[Agent 服务] runAgentHeadless 未处理异常:', extensions?.analysisTools ? '远程分析失败' : err)
+    console.error('[Agent 服务] runAgentHeadless 未处理异常:', extensions?.analysisTools || extensions?.actionTools ? '远程 Agent 任务失败' : err)
     const errorMessage = err instanceof Error ? err.message : '未知错误'
     callbacks.onError(errorMessage)
     callbacks.onComplete()

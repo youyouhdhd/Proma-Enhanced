@@ -17,7 +17,12 @@ class McpSharingStore {
   get(): McpSharingConfig {
     const file = join(getConfigDir(), 'mcp-sharing.json')
     if (existsSync(file)) {
-      try { return normalizeSharing(JSON.parse(readFileSync(file, 'utf8'))) } catch { return normalizeSharing(undefined) }
+      try {
+        const raw = JSON.parse(readFileSync(file, 'utf8')) as { version?: unknown }
+        const normalized = normalizeSharing(raw)
+        if (raw.version !== 3) writeJsonFileAtomic(file, normalized)
+        return normalized
+      } catch { return normalizeSharing(undefined) }
     }
     const config = migrateSharing(normalizePromaMcpServerConfig(getSettings().mcpServer))
     config.roots = config.roots.map((root) => root.source.type === 'agent-workspace' && root.name === root.source.agentWorkspaceId

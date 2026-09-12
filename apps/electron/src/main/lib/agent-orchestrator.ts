@@ -682,7 +682,7 @@ export class AgentOrchestrator {
   async sendMessage(
     input: AgentRunInput,
     callbacks: SessionCallbacks,
-    extensions: { piCustomTools?: ToolDefinition[]; analysisTools?: ToolDefinition[] } = {},
+    extensions: { piCustomTools?: ToolDefinition[]; analysisTools?: ToolDefinition[]; actionTools?: ToolDefinition[] } = {},
   ): Promise<void> {
     const { sessionId, userMessage, rawUserMessage, userMessageUuid, channelId, modelId, workspaceId: requestedWorkspaceId, additionalDirectories, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, mentionedTodoIds, mentionedCalendarEventIds, automationContext, retryOfErrorUuid } = input
     // Capture the focus once per turn. Later UI focus changes must not rewrite this reply's attribution.
@@ -1041,11 +1041,12 @@ export class AgentOrchestrator {
       }
 
       // 10. 构建 MCP 服务器配置 + 记忆工具 + 生图工具 + 自定义工具
-      const mcpServers = extensions.analysisTools ? {} : await this.buildMcpServers(workspaceSlug, proxyUrl)
+      const restrictedTools = extensions.analysisTools ?? extensions.actionTools
+      const mcpServers = restrictedTools ? {} : await this.buildMcpServers(workspaceSlug, proxyUrl)
       let piBuiltinTools: unknown[] = []
       let piMcpTools: unknown[] = []
       const piSdk = await import('@earendil-works/pi-coding-agent')
-      const builtinMcpResult = extensions.analysisTools ? { tools: [], collaborationAvailable: false } : await buildPiBuiltinTools(piSdk, {
+      const builtinMcpResult = restrictedTools ? { tools: [], collaborationAvailable: false } : await buildPiBuiltinTools(piSdk, {
         sessionId,
         channelId,
         modelId: selectedModelId,
@@ -1279,6 +1280,8 @@ export class AgentOrchestrator {
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
         if (extensions.analysisTools) return extensions.analysisTools.some((t) => t.name === toolName)
           ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: '远程分析任务只允许受限读取工具' }
+        if (extensions.actionTools) return extensions.actionTools.some((t) => t.name === toolName)
+          ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: '远程动作任务只允许已授权的绑定工具' }
         const currentMode = getPermissionMode()
 
         // ── 参数校验守卫（所有模式、所有工具，优先于权限检查） ──
@@ -1533,7 +1536,7 @@ export class AgentOrchestrator {
         memoryRefreshOpportunity,
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const startAutoTitleGeneration = (): void => {
-        if (extensions.analysisTools) return // 避免远程 instruction 出现在标题日志或额外模型调用。
+        if (extensions.analysisTools || extensions.actionTools) return // 避免远程 instruction 出现在标题日志或额外模型调用。
         if (titleGenerationStarted) return
         titleGenerationStarted = true
 
@@ -1678,9 +1681,11 @@ export class AgentOrchestrator {
         onRetry: (retry) => {
           this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'retry', ...retry } })
         },
-        ...(extensions.analysisTools ? {
-          customTools: extensions.analysisTools, exclusiveCustomTools: true, maxTurns: 8,
-          prompt: userMessage, systemPrompt: '你是 PROMA 只读分析助手。仅使用提供的项目读取、搜索和 Git 只读工具。不要写入、执行 Shell 或委派其他 Agent。给出分析结论与证据；工具不可用时直接说明限制。',
+        ...(restrictedTools ? {
+          customTools: restrictedTools, exclusiveCustomTools: true, maxTurns: 8,
+          prompt: userMessage, systemPrompt: extensions.actionTools
+            ? '你是 PROMA Agent 动作执行助手。只使用提供的、已经绑定到当前项目的工具完成用户目标；不要切换工作区、委派其他 Agent 或请求未提供的工具。完成后报告实际变化、测试和限制。'
+            : '你是 PROMA 只读分析助手。仅使用提供的项目读取、搜索和 Git 只读工具。不要写入、执行 Shell 或委派其他 Agent。给出分析结论与证据；工具不可用时直接说明限制。',
           additionalDirectories: [], additionalSkillPaths: [], skillMentions: [],
           projectInstructionFiles: [], projectInstructionScope: undefined,
         } : {}),
@@ -2149,7 +2154,7 @@ export class AgentOrchestrator {
 
           // 不可重试 — 走原有终止逻辑
           const errorMessage = rawErrorMessage || '未知错误'
-          console.error(`[Agent 编排] 执行失败:`, extensions.analysisTools ? '远程分析执行失败（详情仅留在会话）' : error)
+          console.error(`[Agent 编排] 执行失败:`, extensions.analysisTools || extensions.actionTools ? '远程 Agent 任务执行失败（详情仅留在会话）' : error)
 
           // 保存已累积的部分内容
           if (accumulatedMessages.length > 0) {
