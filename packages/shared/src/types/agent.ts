@@ -206,6 +206,32 @@ export type SDKUserContentBlock =
   | SDKTextBlock
   | { type: string; [key: string]: unknown }
 
+/** 运行前请求的模型偏好。它不证明最终实际执行模型。 */
+export interface RunModelPreference {
+  channelId?: string
+  modelId?: string
+}
+
+/** 本轮真正开始执行并产生输出的模型。 */
+export interface RunModelExecution {
+  channelId?: string
+  channelName?: string
+  modelId: string
+  modelName?: string
+}
+
+/** 每轮模型事实快照；写入后不随当前渠道、默认模型或 UI Focus 改变。 */
+export interface RunModelSnapshot {
+  requested?: RunModelPreference
+  executed?: RunModelExecution
+  fallback?: {
+    used: boolean
+    fromModelId?: string
+    reasonCode?: string
+  }
+  capturedAt: string
+}
+
 /** SDK assistant 消息 */
 export interface SDKAssistantMessage {
   type: 'assistant'
@@ -230,6 +256,8 @@ export interface SDKAssistantMessage {
   _channelModelId?: string
   /** 渠道 provider，用于按 Agent SDK 实际运行窗口计算压缩阈值 */
   _channelProvider?: ProviderType
+  /** 本轮实际模型事实；新版本展示和审计优先读取此字段。 */
+  runModel?: RunModelSnapshot
 }
 
 /** SDK user 消息 */
@@ -293,6 +321,8 @@ export interface SDKResultMessage {
   _channelModelId?: string
   /** 渠道 provider，用于按 Agent SDK 实际运行窗口计算压缩阈值 */
   _channelProvider?: ProviderType
+  /** 本轮实际模型事实；与同一 turn 的 assistant 消息一致。 */
+  runModel?: RunModelSnapshot
 }
 
 /** SDK system 消息（init / compact_boundary / permission_denied / task_started / task_progress / task_notification） */
@@ -609,7 +639,7 @@ export type AgentEvent =
   // 提示建议
   | { type: 'prompt_suggestion'; suggestion: string }
   // 模型确认（SDK 确认实际使用的模型）
-  | { type: 'model_resolved'; model: string }
+  | { type: 'model_resolved'; model: string; runModel?: RunModelSnapshot }
   // 权限模式变更（Plan → bypassPermissions 等）
   | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
 
@@ -626,7 +656,7 @@ export type PromaEvent =
   | { type: 'enter_plan_mode'; sessionId: string }
   | { type: 'plan_mode_changed'; sessionId: string; active: boolean; source: AgentPlanModeChangeSource }
   | { type: 'retry'; status: 'starting' | 'attempt' | 'cleared' | 'failed' | 'cancelled'; attempt?: number; maxAttempts?: number; delaySeconds?: number; reason?: string; attemptData?: RetryAttempt; runStartedAt?: number; scheduledAt?: number; totalAttempt?: number; maxTotalAttempts?: number; error?: TypedError }
-  | { type: 'model_resolved'; model: string }
+  | { type: 'model_resolved'; model: string; runModel?: RunModelSnapshot }
   | { type: 'context_window'; contextWindow: number }
   | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
   | { type: 'title_updated'; title: string }
@@ -674,6 +704,7 @@ export interface AgentAssistantDeltaPayload {
   /** 主进程为本次运行分配的单调代际，优先于时间戳用于拒绝迟到事件。 */
   runGeneration?: number
   _channelModelId?: string
+  runModel?: RunModelSnapshot
 }
 
 /** SDK 消息与 AgentAssistantDeltaPayload 分离，Delta 只存在于运行时，不写入 JSONL。 */
@@ -843,6 +874,8 @@ export interface AgentMessage {
   createdAt: number
   /** 使用的模型 ID（assistant 消息） */
   model?: string
+  /** 每轮实际模型事实（新格式）。 */
+  runModel?: RunModelSnapshot
   /** 工具活动数据（agent 事件列表，用于回放工具调用） */
   events?: AgentEvent[]
   /** 错误代码（status 消息，role='status' 时使用） */

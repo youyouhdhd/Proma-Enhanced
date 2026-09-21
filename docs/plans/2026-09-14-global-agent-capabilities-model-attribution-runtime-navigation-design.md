@@ -22,7 +22,7 @@
 | 本轮目标 upstream/main | `4e96c5e859302c4a34618d45db352b29a7ebeb28` |
 | 上游增量 | 24 commits / 50 files |
 | 当前 Electron / shared / Pi | `1.13.2` / `0.8.1` / `0.85.1` |
-| 目标开发版本 | Electron `1.14.0`；其他包按实际契约变化递增 |
+| 当前开发版本 | Phase 1：Electron/shared `1.14.0`/`0.9.0`；Phase 2：Electron/shared/session-core `1.14.1`/`0.10.0`/`0.2.0` |
 
 上游的 `v0.19.57` 与 `v0.19.62` 标签当前都指向 `4e96c5e8`，源码 Electron 版本仍为 `0.19.57`，GitHub Latest Release 仍为 `v0.19.53`。因此本轮只能以提交 SHA 为同步依据，不能用上游标签名称推断内容或稳定性。
 
@@ -42,8 +42,8 @@
 | 阶段 | 内容 | 进入条件 | 完成门槛 | 状态 |
 |---|---|---|---|---|
 | Phase 0 | 修订并合入执行文档 | PR #1 可更新 | 文档、版本和 PR 检查完成 | 完成 |
-| Phase 1 | 合并 upstream/main | Phase 0 已合入 | 冲突清零；旧功能与上游新增功能测试通过 | 验证通过，待提交 |
-| Phase 2 | Per-run 模型归因 | Phase 1 基线稳定 | requested/executed/fallback 持久化及跨渠道测试通过 | 未开始 |
+| Phase 1 | 合并 upstream/main | Phase 0 已合入 | 冲突清零；旧功能与上游新增功能测试通过 | 完成 |
+| Phase 2 | Per-run 模型归因 | Phase 1 基线稳定 | requested/executed/fallback 持久化及跨渠道测试通过 | 验证通过，待提交 |
 | Phase 3 | 长运行导航补缺 | Phase 2 不再改变消息契约 | 未读计数、键盘、Reduced Motion、锚点与压力验证通过 | 未开始 |
 | Phase 4 | Global Capability Resolver | 前三阶段稳定 | 解析优先级、Deny-Wins、空配置等价和稳定 hash 测试通过 | 未开始 |
 | Phase 5 | Registry、迁移与 Inspector UI | Resolver 契约冻结 | 原子迁移、管理 UI、来源解释和回滚开关通过 | 未开始 |
@@ -1041,7 +1041,7 @@ bun run --filter='@proma/electron' smoke:renderer-dist
 
 ### Phase 6 — 集成、版本与发布准备
 
-1. Electron 功能版本目标为 `1.14.0`；受影响共享包按实际契约递增；
+1. 每个阶段按仓库规则递增受影响交付物版本；最终发布版本以最后一个完成阶段为准，不回退或复用中间版本；
 2. 生成对应 release notes，更新 README 稳定链接只在正式发布时进行；
 3. 运行 Phase 1 的全部自动验证；
 4. 在 Windows 完成 Pi/native/Bridge/MCP 与安装包冒烟；
@@ -1154,5 +1154,6 @@ previous merged commit: f99edbdb594407ab190b97ae073889c5d96637ab
 | 2026-09-21 22:36 +08:00 | Phase 0 | 完成 | PR #1 以 merge commit `07a0c5a5` 合入 Enhanced main。 |
 | 2026-09-21 22:39 +08:00 | Phase 1 冲突处理 | 完成 | 合并 `upstream/main@4e96c5e8`；解决 5 个文本冲突；Electron/shared 调整为 1.14.0/0.9.0；Bun 重建锁文件。 |
 | 2026-09-21 22:49 +08:00 | Phase 1 验证 | 待提交 | 712 tests / 0 fail、全 workspace typecheck、Electron build、Renderer 439 文件边界、798 产物 smoke、MCP CJS/Electron bundle smoke 和 Pi 0.86.1 包内版本核对通过。 |
+| 2026-09-21 23:26 +08:00 | Phase 2 | 待提交 | 新增 `RunModelSnapshot`，实际模型随 assistant/result/delta 写入现有 JSONL/事件链；飞书终态不再读取当前 Binding。716 tests / 0 fail、typecheck、Electron build、Renderer 边界与产物 smoke 通过。 |
 
 后续每个阶段至少记录：开始 SHA、结束 SHA、版本、修改范围、测试结果、已知限制、是否影响下一阶段。

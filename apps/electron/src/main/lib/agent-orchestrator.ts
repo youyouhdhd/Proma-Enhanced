@@ -20,7 +20,7 @@ import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { app } from 'electron'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, AgentActiveSessionSnapshot, CodexOAuthCredentials, GithubCopilotOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, AgentAssistantDeltaPayload, RewindSessionResult, SkillActivation } from '@proma/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, AgentActiveSessionSnapshot, CodexOAuthCredentials, GithubCopilotOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, AgentAssistantDeltaPayload, RewindSessionResult, SkillActivation, RunModelSnapshot } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
   PROMA_PERMISSION_MODE_CONFIG,
@@ -35,6 +35,7 @@ import {
   resolveReasoningProfile,
   collectSkillActivations,
   mergeSkillActivations,
+  createRunModelSnapshot,
 } from '@proma/shared'
 import type { PromaPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSystemMessage } from '@proma/shared'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
@@ -990,6 +991,34 @@ export class AgentOrchestrator {
     // 委派子会话必须继承当前实际运行的模型；未显式传入时与 runtime 的默认值保持一致。
     const selectedModelId = modelId || DEFAULT_MODEL_ID
     let resolvedModel = selectedModelId
+    let runModelSnapshot: RunModelSnapshot | undefined
+    const captureRunModel = (executedModelId: string): RunModelSnapshot => {
+      const normalizedModelId = executedModelId.replace(/\[1m\]$/i, '')
+      if (runModelSnapshot?.executed?.modelId.toLowerCase() === normalizedModelId.toLowerCase()) {
+        return runModelSnapshot
+      }
+      resolvedModel = normalizedModelId
+      runModelSnapshot = createRunModelSnapshot({
+        channel,
+        requestedModelId: selectedModelId,
+        executedModelId: resolvedModel,
+      })
+      return runModelSnapshot
+    }
+    const attachRunModel = (message: SDKMessage): SDKMessage => {
+      if (message.type !== 'assistant' && message.type !== 'result') return message
+      if (!runModelSnapshot) {
+        // 新运行在模型确认前失败时保持 Unknown，不能把 requested model 伪装成 executed。
+        delete (message as Record<string, unknown>)._channelModelId
+        return message
+      }
+      return {
+        ...(message as Record<string, unknown>),
+        runModel: runModelSnapshot,
+        _channelModelId: runModelSnapshot.executed?.modelId,
+        _channelProvider: channel.provider,
+      } as unknown as SDKMessage
+    }
     let titleGenerationStarted = false
     /** 捕获到的 SDK session ID（用于 resume / recovery） */
     let capturedSdkSessionId = existingSdkSessionId
@@ -1597,10 +1626,12 @@ export class AgentOrchestrator {
 
       }
       const handleModelResolved = (model: string): void => {
-        // `[1m]` 是 SDK 内部上下文变体，不应泄漏到标题生成或用户可见的模型名。
-        resolvedModel = model.replace(/\[1m\]$/i, '')
+        const snapshot = captureRunModel(model)
         console.log(`[Agent 编排] SDK 确认模型: ${resolvedModel}`)
-        this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'model_resolved', model: resolvedModel } })
+        this.eventBus.emit(sessionId, {
+          kind: 'proma_event',
+          event: { type: 'model_resolved', model: resolvedModel, runModel: snapshot },
+        })
       }
       const handleContextWindow = (cw: number): void => {
         const inferredWindow = inferContextWindow(modelId)
@@ -1812,11 +1843,22 @@ export class AgentOrchestrator {
                   session_id: msg.session_id,
                   runStartedAt: streamStartedAt,
                   runGeneration,
-                  _channelModelId: msg._channelModelId,
+                  ...(runModelSnapshot?.executed?.modelId
+                    ? { _channelModelId: runModelSnapshot.executed.modelId, runModel: runModelSnapshot }
+                    : {}),
                 },
               })
               continue
             }
+            if (msg.type === 'system') {
+              const systemModel = (msg as SDKSystemMessage).model
+              if (systemModel) captureRunModel(systemModel)
+            }
+            if (msg.type === 'assistant') {
+              const assistantModel = (msg as SDKAssistantMessage).message.model
+              if (assistantModel) captureRunModel(assistantModel)
+            }
+            msg = attachRunModel(msg)
             const isPartialMessage = isPartialSDKMessage(msg)
             if (msg.type === 'result') {
               const skillActivations = mergeSkillActivations(
@@ -1927,8 +1969,7 @@ export class AgentOrchestrator {
                 // 不可重试 → 终止
                 const hasPiPartialOutput = hasPiAssistantTextContent(assistantMsg)
                 if (hasPiPartialOutput) {
-                  const partialOutput = stripPiAssistantError(assistantMsg)
-                  if (modelId) partialOutput._channelModelId = modelId
+                  const partialOutput = attachRunModel(stripPiAssistantError(assistantMsg)) as SDKAssistantMessage
                   partialOutput._channelProvider = channel.provider
                   const partialRecord = partialOutput as SDKAssistantMessage & { _createdAt?: number }
                   if (typeof partialRecord._createdAt !== 'number') {
@@ -1954,8 +1995,9 @@ export class AgentOrchestrator {
                   },
                   parent_tool_use_id: null,
                   uuid: randomUUID(),
-                  _channelModelId: modelId,
+                  ...(runModelSnapshot?.executed?.modelId ? { _channelModelId: runModelSnapshot.executed.modelId } : {}),
                   _channelProvider: channel.provider,
+                  ...(runModelSnapshot ? { runModel: runModelSnapshot } : {}),
                   error: { message: typedError.message, errorType: typedError.code },
                   _createdAt: Date.now(),
                   _errorCode: typedError.code,
@@ -1992,9 +2034,6 @@ export class AgentOrchestrator {
                 } else {
                   // 为结果消息注入渠道信息，确保持久化后能按模型上下文窗口计算压缩阈值
                   if (msg.type === 'result') {
-                    if (modelId) {
-                      (msg as Record<string, unknown>)._channelModelId = modelId
-                    }
                     ;(msg as Record<string, unknown>)._channelProvider = channel.provider
                   }
                   // 为 assistant 消息注入渠道信息，确保持久化后能正确匹配模型显示名与上下文窗口
@@ -2002,9 +2041,6 @@ export class AgentOrchestrator {
                     const assistantRecord = msg as Record<string, unknown>
                     if (typeof assistantRecord._createdAt !== 'number') {
                       assistantRecord._createdAt = streamStartedAt
-                    }
-                    if (modelId) {
-                      assistantRecord._channelModelId = modelId
                     }
                     assistantRecord._channelProvider = channel.provider
                   }

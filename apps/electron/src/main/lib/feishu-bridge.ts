@@ -30,7 +30,7 @@ import type {
   SDKAssistantMessage,
   SDKUserMessage,
 } from '@proma/shared'
-import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS } from '@proma/shared'
+import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS, formatExecutedModelDisplay } from '@proma/shared'
 import { getDecryptedBotAppSecret } from './feishu-config'
 import { agentEventBus, runAgentHeadless, stopAgent } from './agent-service'
 import { createAgentSession, listAgentSessions, getAgentSessionMeta } from './agent-session-manager'
@@ -602,7 +602,6 @@ class FeishuBridge {
         binding.chatId,
         renderRunCard(initialState, {
           header: `${binding.groupName ?? buildSessionMirrorGroupName(session)} · Agent 处理中`,
-          modelDisplay: this.resolveModelDisplay(session.id),
           stopHint: '在群里发送 `/stop` 可终止当前任务',
         }),
       )
@@ -1154,20 +1153,6 @@ class FeishuBridge {
     return null
   }
 
-  /**
-   * 解析会话当前「渠道名 / 模型名」展示串（binding > Bot 配置 > 应用设置）。
-   * 渠道或模型失效时返回 undefined，卡片回退展示原始 modelId。
-   */
-  private resolveModelDisplay(sessionId: string): string | undefined {
-    const binding = this.findBindingBySessionId(sessionId)
-    const channelId = binding?.channelId || this.botConfig.defaultChannelId || getSettings().agentChannelId
-    const modelId = binding?.modelId || this.botConfig.defaultModelId || getSettings().agentModelId
-    if (!channelId || !modelId) return undefined
-    const info = describeBindingModel(channelId, modelId)
-    if (!info.valid) return undefined
-    return info.channelName + ' / ' + info.modelName
-  }
-
   private async createSessionMirrorGroup(userOpenId: string, name: string): Promise<string | null> {
     if (!this.client) return null
 
@@ -1688,7 +1673,6 @@ class FeishuBridge {
         chatId,
         renderRunCard(initialState, {
           header: headerTitle,
-          modelDisplay: this.resolveModelDisplay(binding.sessionId),
           // 飞书 cardAction 不通过长连接推送，按钮点击会报 200340；
           // 改为文本提示用户用 /stop 命令终止
           stopHint: '发送 `/stop` 可终止当前任务',
@@ -1824,7 +1808,7 @@ class FeishuBridge {
           (nextState.terminal === 'running' ? 'Agent 处理中' : 'Agent 已完成')
         const card = renderRunCard(nextState, {
           header: headerTitle,
-          modelDisplay: this.resolveModelDisplay(sessionId),
+          modelDisplay: formatExecutedModelDisplay(nextState.meta.runModel),
           stopHint: nextState.terminal === 'running' ? '发送 `/stop` 可终止当前任务' : undefined,
         })
         if (nextState.terminal === 'running') {
@@ -1910,7 +1894,7 @@ class FeishuBridge {
     const header = this.resolveContextPrefix(this.sessionToChat.get(sessionId) ?? '')
     const headerTitle = (header ? `${header.trim()} · ` : '') + 'Agent 出错'
     void cardStream
-      .flush(renderRunCard(nextState, { header: headerTitle, modelDisplay: this.resolveModelDisplay(sessionId) }))
+      .flush(renderRunCard(nextState, { header: headerTitle, modelDisplay: formatExecutedModelDisplay(nextState.meta.runModel) }))
       .then(() => cardStream.close())
       .catch((err) => console.error('[飞书 Bridge] error 终态刷新失败:', redactSensitiveLogValue(err)))
     this.streamingRunStates.delete(sessionId)
@@ -1926,7 +1910,7 @@ class FeishuBridge {
     const header = this.resolveContextPrefix(this.sessionToChat.get(sessionId) ?? '')
     const headerTitle = (header ? `${header.trim()} · ` : '') + 'Agent 已中断'
     void cardStream
-      .flush(renderRunCard(nextState, { header: headerTitle, modelDisplay: this.resolveModelDisplay(sessionId) }))
+      .flush(renderRunCard(nextState, { header: headerTitle, modelDisplay: formatExecutedModelDisplay(nextState.meta.runModel) }))
       .then(() => cardStream.close())
       .catch((err) => console.error('[飞书 Bridge] interrupted 终态刷新失败:', redactSensitiveLogValue(err)))
     this.streamingRunStates.delete(sessionId)

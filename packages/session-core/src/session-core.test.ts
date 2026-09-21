@@ -174,6 +174,31 @@ describe('旧扁平格式（格式 A）归一', () => {
   })
 })
 
+describe('每轮实际模型归因', () => {
+  test('Given requested A 与 executed B When 分组 Then turn 使用执行模型 B', () => {
+    const [turn] = groupIntoTurns(readSessionMessagesFromString(jsonl([
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: '由 B 返回' }], model: 'model-a' },
+        parent_tool_use_id: null,
+        _channelModelId: 'model-a',
+        runModel: {
+          requested: { channelId: 'channel-a', modelId: 'model-a' },
+          executed: { channelId: 'channel-a', modelId: 'model-b' },
+          fallback: { used: true, fromModelId: 'model-a' },
+          capturedAt: '2026-09-21T00:00:00.000Z',
+        },
+      },
+    ])))
+
+    expect(turn).toMatchObject({
+      type: 'assistant-turn',
+      model: 'model-b',
+      runModel: { executed: { modelId: 'model-b' } },
+    })
+  })
+})
+
 describe('容错与渐进式读取原语', () => {
   const raw = jsonl([
     { type: 'user', message: { content: [{ type: 'text', text: '问题甲' }] }, parent_tool_use_id: null },

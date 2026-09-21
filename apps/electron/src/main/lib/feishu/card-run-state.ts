@@ -4,6 +4,7 @@ import type {
   SDKAssistantMessage,
   SDKResultMessage,
   SDKUserMessage,
+  RunModelSnapshot,
 } from '@proma/shared'
 import { isPartialSDKMessage } from '../bridge-agent-message-utils'
 
@@ -64,6 +65,7 @@ export interface RunState {
     outputTokens?: number
     costUsd?: number
     model?: string
+    runModel?: RunModelSnapshot
   }
 }
 
@@ -377,13 +379,18 @@ export function reduce(state: RunState, payload: AgentStreamPayload): RunState {
       const useCumulativeSnapshot = isPartial || previousSnapshot != null
       const partialBlocks: PartialAssistantSnapshot['blocks'] = {}
       let next = state
-      if (am.message?.model && !next.meta.model) {
+      if (am.runModel?.executed) {
+        next = {
+          ...next,
+          meta: { ...next.meta, model: am.runModel.executed.modelId, runModel: am.runModel },
+        }
+      } else if (am.message?.model && !next.meta.model) {
         next = { ...next, meta: { ...next.meta, model: am.message.model } }
       }
       // assistant 消息上若携带顶层 error 字段，直接转为 error 终态
       // （SDK 偶尔会在 assistant 帧带 error，不走 result 路径）
       if (am.error?.message) {
-        return markError(state, am.error.message)
+        return markError(next, am.error.message)
       }
 
       for (const [index, block] of (am.message?.content ?? []).entries()) {
@@ -470,6 +477,10 @@ export function reduce(state: RunState, payload: AgentStreamPayload): RunState {
         inputTokens: rm.usage?.input_tokens,
         outputTokens: rm.usage?.output_tokens,
         costUsd: rm.total_cost_usd,
+        ...(rm.runModel?.executed ? {
+          model: rm.runModel.executed.modelId,
+          runModel: rm.runModel,
+        } : {}),
       }
       // result.subtype 以 'error' 开头视为错误（含 error / error_max_turns /
       // error_max_budget_usd / error_during_execution）
@@ -502,7 +513,14 @@ export function reduce(state: RunState, payload: AgentStreamPayload): RunState {
   if (payload.kind === 'proma_event') {
     const evt = payload.event
     if (evt.type === 'model_resolved') {
-      return { ...state, meta: { ...state.meta, model: evt.model } }
+      return {
+        ...state,
+        meta: {
+          ...state.meta,
+          model: evt.runModel?.executed?.modelId ?? evt.model,
+          ...(evt.runModel ? { runModel: evt.runModel } : {}),
+        },
+      }
     }
     return state
   }

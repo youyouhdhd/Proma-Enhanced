@@ -14,6 +14,7 @@ import {
   type SDKAssistantMessage,
   type SDKUserMessage,
   type SDKSystemMessage,
+  type RunModelSnapshot,
 } from '@proma/shared'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tags'
 
@@ -70,6 +71,8 @@ export interface AssistantTurn {
   inputMessage?: SDKUserMessage
   /** 模型名称（取首条 assistant 消息的 model） */
   model?: string
+  /** 当前 turn 的每轮实际模型事实。 */
+  runModel?: RunModelSnapshot
   /** 创建时间（取首条 assistant 消息的时间） */
   createdAt?: number
   /**
@@ -150,7 +153,8 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
           assistantMessages: [aMsg],
           turnMessages: [msg],
           inputMessage: pendingInputMessage,
-          model: aMsg._channelModelId || aMsg.message?.model || sessionModelId,
+          model: aMsg.runModel?.executed?.modelId || aMsg._channelModelId || aMsg.message?.model || sessionModelId,
+          runModel: aMsg.runModel,
           createdAt: meta.createdAt,
           // 紧跟在后台任务唤醒之后的新 turn：阻断与上一轮的合并
           startsAfterWake: pendingWakeBoundary || undefined,

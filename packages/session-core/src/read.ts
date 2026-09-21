@@ -40,6 +40,7 @@ export function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
         model: legacy.model,
       },
       parent_tool_use_id: null,
+      ...(legacy.runModel ? { runModel: legacy.runModel } : {}),
       _legacy: true,
       _createdAt: legacy.createdAt,
     } as unknown as SDKMessage

@@ -26,7 +26,7 @@ import type {
   SDKUserContentBlock,
   SDKUserMessage,
 } from '@proma/shared'
-import { getSDKCompactStatus } from '@proma/shared'
+import { getExecutedModelId, getSDKCompactStatus } from '@proma/shared'
 
 export type SessionMiniMapType = 'chat' | 'agent'
 
@@ -205,7 +205,7 @@ function buildAgentMinimapItems(messages: SDKMessage[], userAvatar?: string): Ta
         id: assistant.uuid ?? `assistant-${items.length}`,
         role: 'assistant',
         preview,
-        model: assistant._channelModelId ?? assistant.message?.model,
+        model: getExecutedModelId(assistant.runModel) ?? assistant._channelModelId ?? assistant.message?.model,
       })
       continue
     }

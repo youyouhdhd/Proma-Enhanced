@@ -80,8 +80,8 @@ import {
 } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
-import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, AgentAssistantDelta, AgentAssistantDeltaPayload, AgentStreamErrorPayload, SDKAssistantMessage, SDKMessage, SDKUserMessage, SDKSystemMessage, PromaEvent, AgentSessionMeta, ProviderType, SDKContentBlock, SDKUserContentBlock } from '@proma/shared'
-import { inferContextWindow } from '@proma/shared'
+import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, AgentAssistantDelta, AgentAssistantDeltaPayload, AgentStreamErrorPayload, SDKAssistantMessage, SDKMessage, SDKUserMessage, SDKSystemMessage, PromaEvent, AgentSessionMeta, ProviderType, SDKContentBlock, SDKUserContentBlock, RunModelSnapshot } from '@proma/shared'
+import { getExecutedModelId, inferContextWindow } from '@proma/shared'
 import {
   buildExternalAgentRunActivation,
   createExternalAgentRunUserMessage,
@@ -279,7 +279,7 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
       case 'plan_mode_changed':
         return [{ type: 'plan_mode_changed', active: evt.active, source: evt.source }]
       case 'model_resolved':
-        return [{ type: 'model_resolved', model: evt.model }]
+        return [{ type: 'model_resolved', model: evt.model, runModel: evt.runModel }]
       case 'context_window':
         // main 进程从 SDK result 拿到的真实 contextWindow，转成 usage_update 让 atom 合并到 streamState
         return [{ type: 'usage_update', usage: { contextWindow: evt.contextWindow } }]
@@ -389,7 +389,7 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         // 注意：必须优先用 _channelModelId（用户在 UI 上选择的原始模型 ID），
         // 因为部分端点（如智谱）会在 message.model 里剥掉 [1m] 等规格后缀，
         // 导致 glm-x-preview[1m] 被识别成 glm-x-preview（200K）。
-        const modelName = aMsg._channelModelId ?? aMsg.message.model
+        const modelName = getExecutedModelId(aMsg.runModel) ?? aMsg._channelModelId ?? aMsg.message.model
         const fallbackWindow = inferContextWindow(modelName)
         events.push({
           type: 'usage_update',
@@ -435,6 +435,7 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         isSyntheticCompactionResult?: boolean
         _channelModelId?: string
         _channelProvider?: ProviderType
+        runModel?: RunModelSnapshot
       }
       if (rMsg.isSyntheticCompactionResult) {
         return [{
@@ -445,10 +446,11 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
       // 多 entry 场景（Task 子 Agent 等）：取最大 contextWindow，
       // 避免子 Agent 的小窗口覆盖主模型的大窗口、导致指示器飘忽。
       let contextWindow: number | undefined
-      const fallbackWindow = inferContextWindow(rMsg._channelModelId)
+      const executedModelId = getExecutedModelId(rMsg.runModel)
+      const fallbackWindow = inferContextWindow(executedModelId ?? rMsg._channelModelId)
       if (rMsg.modelUsage) {
         for (const [modelId, info] of Object.entries(rMsg.modelUsage)) {
-          const modelFallbackWindow = inferContextWindow(rMsg._channelModelId ?? modelId)
+          const modelFallbackWindow = inferContextWindow(executedModelId ?? rMsg._channelModelId ?? modelId)
           const candidate = Math.max(info?.contextWindow ?? 0, modelFallbackWindow ?? 0) || undefined
           if (candidate && (contextWindow === undefined || candidate > contextWindow)) {
             contextWindow = candidate
@@ -1266,7 +1268,7 @@ export function useGlobalAgentListeners(): void {
           const deltaRunStartedAt = deltaPayload.runStartedAt
           const sessionModelMap = store.get(agentSessionModelMapAtom)
           const defaultModelId = store.get(agentModelIdAtom)
-          const modelId = deltaPayload._channelModelId ?? sessionModelMap.get(sessionId) ?? defaultModelId ?? undefined
+          const modelId = getExecutedModelId(deltaPayload.runModel) ?? deltaPayload._channelModelId ?? sessionModelMap.get(sessionId) ?? defaultModelId ?? undefined
           const sessionChannelMap = store.get(agentSessionChannelMapAtom)
           const defaultChannelId = store.get(agentChannelIdAtom)
           const channelId = sessionChannelMap.get(sessionId) ?? defaultChannelId ?? undefined
@@ -1283,6 +1285,7 @@ export function useGlobalAgentListeners(): void {
               ? current[existingIndex] as SDKAssistantMessage
               : createAssistantDeltaPreview(deltaPayload, {
                 ...(modelId ? { _channelModelId: modelId } : {}),
+                ...(deltaPayload.runModel ? { runModel: deltaPayload.runModel } : {}),
                 ...(provider ? { _channelProvider: provider } : {}),
                 ...(deltaRunStartedAt != null ? { _promaLiveRunStartedAt: deltaRunStartedAt } : {}),
               })

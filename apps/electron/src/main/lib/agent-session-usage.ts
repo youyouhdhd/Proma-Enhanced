@@ -20,7 +20,7 @@
  * 避免对整份会话 JSONL 全量 JSON.parse（高频 daily 任务一天可触发数百次）。
  */
 
-import { calculateContextUsageRatio, inferContextWindow } from '@proma/shared'
+import { calculateContextUsageRatio, getExecutedModelId, inferContextWindow } from '@proma/shared'
 import type { SDKAssistantMessage, SDKResultMessage } from '@proma/shared'
 import { existsSync, readFileSync } from 'node:fs'
 import { getAgentSessionMessagesPath } from './config-paths'
@@ -81,7 +81,7 @@ export function getSessionContextUsageRatio(sessionId: string): number | undefin
       const usage = asst.message?.usage
       if (!usage) continue
       const usedTokens = sumUsedTokens(usage)
-      const modelId = asst._channelModelId ?? asst.message?.model
+      const modelId = getExecutedModelId(asst.runModel) ?? asst._channelModelId ?? asst.message?.model
       const contextWindow = inferContextWindow(modelId)
       return calculateContextUsageRatio(usedTokens, contextWindow)
     }
@@ -105,7 +105,7 @@ function pickResultContextWindow(result: SDKResultMessage): number | undefined {
   if (!result.modelUsage) return undefined
   let best: number | undefined
   for (const [modelId, info] of Object.entries(result.modelUsage)) {
-    const fallbackModelId = result._channelModelId ?? modelId
+    const fallbackModelId = getExecutedModelId(result.runModel) ?? result._channelModelId ?? modelId
     const fallbackWindow = inferContextWindow(fallbackModelId)
     const win = Math.max(info?.contextWindow ?? 0, fallbackWindow ?? 0) || undefined
     if (win === undefined) continue

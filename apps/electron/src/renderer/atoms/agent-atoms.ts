@@ -1375,8 +1375,8 @@ export function applyAgentEvent(
     }
 
     case 'model_resolved':
-      // 不用 SDK 返回的实际模型名覆盖，保持用户选择的 modelId
-      // 以确保 resolveModelDisplayName 能匹配到渠道配置的显示名
+      // 会话选择仍代表下一轮 requested model；实际模型由每条消息的 runModel 快照展示，
+      // 不能反向覆盖会话偏好。
       return prev
 
     case 'retrying': {

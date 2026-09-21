@@ -81,6 +81,7 @@ import type {
 import type { AgentPendingFile } from '@proma/shared'
 import {
   getSDKCompactStatus,
+  getExecutedModelId,
   inferContextWindow,
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_TITLE,
@@ -215,7 +216,7 @@ function extractTurnUsage(turnMessages: SDKMessage[]): { durationMs?: number; us
     let contextWindow: number | undefined
     if (resultMsg.modelUsage) {
       for (const [modelId, info] of Object.entries(resultMsg.modelUsage)) {
-        const fallbackModelId = resultMsg._channelModelId ?? modelId
+        const fallbackModelId = getExecutedModelId(resultMsg.runModel) ?? resultMsg._channelModelId ?? modelId
         const fallbackWindow = inferContextWindow(fallbackModelId)
         const candidate = Math.max(info?.contextWindow ?? 0, fallbackWindow ?? 0) || undefined
         if (candidate && (contextWindow === undefined || candidate > contextWindow)) {
@@ -223,7 +224,7 @@ function extractTurnUsage(turnMessages: SDKMessage[]): { durationMs?: number; us
         }
       }
     } else {
-      contextWindow = inferContextWindow(resultMsg._channelModelId)
+      contextWindow = inferContextWindow(getExecutedModelId(resultMsg.runModel) ?? resultMsg._channelModelId)
     }
     return {
       durationMs,
@@ -677,7 +678,7 @@ export function SDKMessageRenderer({
       return null
     }
 
-    const model = aMsg._channelModelId || aMsg.message?.model || sessionModelId
+    const model = getExecutedModelId(aMsg.runModel) || aMsg._channelModelId || aMsg.message?.model || sessionModelId
     const meta = extractMeta(message)
 
     // 检测是否有主要内容（text 块）
