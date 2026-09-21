@@ -41,8 +41,8 @@
 
 | 阶段 | 内容 | 进入条件 | 完成门槛 | 状态 |
 |---|---|---|---|---|
-| Phase 0 | 修订并合入执行文档 | PR #1 可更新 | 文档、版本和 PR 检查完成 | 待合并 |
-| Phase 1 | 合并 upstream/main | Phase 0 已合入 | 冲突清零；旧功能与上游新增功能测试通过 | 未开始 |
+| Phase 0 | 修订并合入执行文档 | PR #1 可更新 | 文档、版本和 PR 检查完成 | 完成 |
+| Phase 1 | 合并 upstream/main | Phase 0 已合入 | 冲突清零；旧功能与上游新增功能测试通过 | 验证通过，待提交 |
 | Phase 2 | Per-run 模型归因 | Phase 1 基线稳定 | requested/executed/fallback 持久化及跨渠道测试通过 | 未开始 |
 | Phase 3 | 长运行导航补缺 | Phase 2 不再改变消息契约 | 未读计数、键盘、Reduced Motion、锚点与压力验证通过 | 未开始 |
 | Phase 4 | Global Capability Resolver | 前三阶段稳定 | 解析优先级、Deny-Wins、空配置等价和稳定 hash 测试通过 | 未开始 |
@@ -1151,5 +1151,8 @@ previous merged commit: f99edbdb594407ab190b97ae073889c5d96637ab
 | 2026-09-21 22:27 +08:00 | 导航基线 | 完成 | 源码确认已有 StickToBottom、ScrollMinimap、Jump-to-bottom、observer 和位置补偿；Phase 3 改为补缺。 |
 | 2026-09-21 22:27 +08:00 | 合并预演 | 完成 | `git merge-tree` 确认 5 个文本冲突、17 个双方共同修改文件。 |
 | 2026-09-21 22:34 +08:00 | Phase 0 文档修订 | 待合并 | 规格更新为 1,155 行；54 个代码围栏闭合、无尾随空白；frozen lockfile 与全 workspace typecheck 通过；Electron 版本递增至 1.13.3。 |
+| 2026-09-21 22:36 +08:00 | Phase 0 | 完成 | PR #1 以 merge commit `07a0c5a5` 合入 Enhanced main。 |
+| 2026-09-21 22:39 +08:00 | Phase 1 冲突处理 | 完成 | 合并 `upstream/main@4e96c5e8`；解决 5 个文本冲突；Electron/shared 调整为 1.14.0/0.9.0；Bun 重建锁文件。 |
+| 2026-09-21 22:49 +08:00 | Phase 1 验证 | 待提交 | 712 tests / 0 fail、全 workspace typecheck、Electron build、Renderer 439 文件边界、798 产物 smoke、MCP CJS/Electron bundle smoke 和 Pi 0.86.1 包内版本核对通过。 |
 
 后续每个阶段至少记录：开始 SHA、结束 SHA、版本、修改范围、测试结果、已知限制、是否影响下一阶段。

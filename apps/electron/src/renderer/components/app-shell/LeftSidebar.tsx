@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Star, Settings, Plus, CirclePlus, Trash2, Pencil, PanelLeft, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, FolderInput, FolderPlus, Clock, CalendarDays, ChevronRight, ChevronDown, ChevronUp, ChevronsDownUp, Blocks, Brain, ListTodo, GitBranch, Download, Loader2, RotateCw, Info } from 'lucide-react'
+import { Pin, PinOff, Star, Settings, Plus, CirclePlus, Trash2, Pencil, PanelLeft, PanelRight, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, FolderInput, FolderPlus, Clock, CalendarDays, ChevronRight, ChevronDown, ChevronUp, ChevronsDownUp, Blocks, Brain, ListTodo, GitBranch, Download, Loader2, RotateCw, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -99,6 +99,7 @@ import { sidebarViewModeAtom } from '@/atoms/sidebar-atoms'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { hasUpdateAtom, updateStatusAtom, type UpdateStatus } from '@/atoms/updater'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { clearBrowserSessionStateAtom } from '@/atoms/browser-atoms'
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
 import { conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
@@ -796,6 +797,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
   const setSessionPendingFiles = useSetAtom(agentSessionPendingFilesAtom)
   const setSessionViewStateMap = useSetAtom(sessionViewStateMapAtom)
+  const clearBrowserSessionState = useSetAtom(clearBrowserSessionStateAtom)
 
   /** 清理 per-conversation/session Map atoms 条目 */
   const cleanupMapAtoms = React.useCallback((id: string) => {
@@ -858,6 +860,9 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     setSessionPathMap(deleteKey)
     // 视图状态（预览开关 + 上次视图）：删除/归档是终态，统一清理避免孤立条目
     setSessionViewStateMap(deleteKey)
+    // 即使主进程的 browser-closed 事件因删除过程中的重渲染晚到，也不能让右侧工作区
+    // 保留已删除会话的浏览器面板。
+    clearBrowserSessionState(id)
 
     // 重型流式数据：streamingStates（累积 content + toolActivities）与 liveMessages（SDK 消息数组）
     setStreamingStates(deleteKey)
@@ -888,7 +893,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     sessionExistsAtom.remove(id)
 
     clearPreviewCacheForSession(id)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvReasoningLevel, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setPreviewFiles, setPreviewContentRefreshVersion, setPreviewResolvedPaths, setConversationQuotedSelections, setAgentSideChatMap, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setNonGitFileChanges, setFileChangesCurrentRun, setDiffData, setAgentSidePanelOpenMap, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setSessionViewStateMap, setStreamingStates, setLiveMessagesMap, setSessionPendingFiles, store])
+  }, [clearBrowserSessionState, setConvModels, setConvContextLength, setConvThinking, setConvReasoningLevel, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setPreviewFiles, setPreviewContentRefreshVersion, setPreviewResolvedPaths, setConversationQuotedSelections, setAgentSideChatMap, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setNonGitFileChanges, setFileChangesCurrentRun, setDiffData, setAgentSidePanelOpenMap, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setSessionViewStateMap, setStreamingStates, setLiveMessagesMap, setSessionPendingFiles, store])
 
   const currentWorkspaceSlug = React.useMemo(() => {
     if (!currentWorkspaceId) return null
@@ -3228,13 +3233,19 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
                 className="group flex size-10 items-center justify-center p-1 titlebar-no-drag"
               >
                 <span className="flex size-8 items-center justify-center rounded-[10px] bg-muted text-foreground/60 transition-[background-color,color] duration-150 group-hover:bg-foreground/[0.08] group-hover:text-foreground">
-                  <PanelLeftOpen size={16} />
+                  <PanelRight size={16} />
                 </span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
-              展开侧边栏 (
-              {navigator.platform.includes("Mac") ? "⌘B" : "Ctrl+Shift+E"})
+              <span className="flex items-center gap-2">
+                <span>展开侧边栏</span>
+                <ShortcutKeycaps
+                  shortcutId="toggle-sidebar"
+                  keycapClassName="h-5 min-w-5 px-1 text-[11px]"
+                  separatorClassName="text-[10px]"
+                />
+              </span>
             </TooltipContent>
           </Tooltip>
 
@@ -3440,6 +3451,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         <Tooltip>
           <TooltipTrigger asChild>
             <button
+              type="button"
               onClick={() => setSidebarCollapsed(true)}
               className={cn(
                 'sidebar-collapse-button mt-2 size-10 flex-shrink-0 flex items-center justify-center rounded-[10px] text-foreground/40 sidebar-control-surface hover:text-foreground/60 titlebar-no-drag transition-[background-color,color] duration-150'
@@ -3448,7 +3460,16 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
               <PanelLeft size={14} />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="right">收起侧边栏 ({navigator.platform.includes('Mac') ? '⌘B' : 'Ctrl+Shift+E'})</TooltipContent>
+          <TooltipContent side="right">
+            <span className="flex items-center gap-2">
+              <span>收起侧边栏</span>
+              <ShortcutKeycaps
+                shortcutId="toggle-sidebar"
+                keycapClassName="h-5 min-w-5 px-1 text-[11px]"
+                separatorClassName="text-[10px]"
+              />
+            </span>
+          </TooltipContent>
         </Tooltip>
       </div>
 
@@ -3491,7 +3512,16 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
               <Search size={16} />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">搜索 ({getAcceleratorDisplay(getActiveAccelerator('global-search'))})</TooltipContent>
+          <TooltipContent side="bottom">
+            <span className="flex items-center gap-2">
+              <span>搜索</span>
+              <ShortcutKeycaps
+                shortcutId="global-search"
+                keycapClassName="h-5 min-w-5 px-1 text-[11px]"
+                separatorClassName="text-[10px]"
+              />
+            </span>
+          </TooltipContent>
         </Tooltip>
       </div>
 

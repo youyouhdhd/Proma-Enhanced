@@ -41,6 +41,7 @@ import {
 } from './agent-collaboration-utils'
 import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel } from './agent-model-selection'
 import { answersArrayToRecord, askUserAnswersSchema } from './ask-user-tool-schema'
+import { serializePiToolResultPayload } from './adapters/pi-tool-result-json'
 
 interface CollaborationToolContext {
   sessionId: string
@@ -831,9 +832,10 @@ export function buildPiCollaborationTools(
   })
 
   function piJsonResult(payload: unknown): { content: Array<{ type: 'text'; text: string }>; details: unknown } {
+    const serialized = serializePiToolResultPayload(payload)
     return {
-      content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
-      details: payload,
+      content: [{ type: 'text', text: serialized.text }],
+      details: serialized.details,
     }
   }
 

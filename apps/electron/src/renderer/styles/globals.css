@@ -17,6 +17,22 @@
   text-rendering: optimizeLegibility;
 }
 
+/* Electron 首帧和认证切换期间，确保文档不会回落到 Chromium 黑色背景。 */
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+html,
+body {
+  height: 100%;
+}
+
 /* CRT Terminal 主题：全局等宽字体覆盖 */
 .theme-terminal-dark {
   font-family:
@@ -532,6 +548,9 @@
   * {
     @apply border-border;
   }
+  html, body, #root {
+    height: 100%;
+  }
   body {
     @apply bg-background text-foreground;
   }
@@ -544,7 +563,8 @@
 }
 
 /* Draggable title bar region for Electron window */
-.titlebar-drag-region {
+.titlebar-drag-region,
+.app-drag-region {
   -webkit-app-region: drag;
   app-region: drag;
 }
@@ -2664,6 +2684,18 @@
   overflow-x: auto;
   border-radius: 0.5rem;
 }
+.live-markdown-table-editor-hint {
+  display: flex;
+  min-height: 1.75rem;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0.2rem 0.55rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
 .live-markdown-table-cell-trigger {
   display: block;
   width: calc(100% + 1.4rem);
@@ -2678,10 +2710,16 @@
   line-height: inherit;
   text-align: inherit;
   cursor: text;
-  transition: background-color 120ms ease;
+  transform-origin: center;
+  transition-property: background-color, transform;
+  transition-duration: 120ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
 .live-markdown-table-cell-trigger:hover {
   background: hsl(var(--muted) / 0.58);
+}
+.live-markdown-table-cell-trigger:active {
+  transform: scale(0.96);
 }
 .live-markdown-table-cell-trigger:focus-visible {
   outline: 2px solid hsl(var(--ring));

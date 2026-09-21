@@ -592,3 +592,18 @@ describe('Agent 会话引用 prompt', () => {
     }
   })
 })
+
+describe('Agent 会话删除墓碑', () => {
+  test('Given 已删除会话的晚到 SDK 输出 When 追加 Then 不重新创建 transcript', () => {
+    const id = 'deleted-session-late-output'
+    writeAgentSessionsIndex([{ id, title: '待删除会话', workspaceId: 'workspace-a', createdAt: 1, updatedAt: 1 }])
+    writeAgentSessionJsonl(id, [JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: '原始消息' }] } })])
+
+    manager.markAgentSessionDeleting(id)
+    manager.deleteAgentSession(id)
+    manager.appendSDKMessages(id, [{ type: 'result', subtype: 'success' } as never])
+
+    expect(manager.getAgentSessionMeta(id)).toBeUndefined()
+    expect(existsSync(join(tempHome, '.proma', 'agent-sessions', `${id}.jsonl`))).toBe(false)
+  })
+})

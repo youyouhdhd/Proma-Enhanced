@@ -84,6 +84,7 @@ import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStr
 import { inferContextWindow } from '@proma/shared'
 import {
   buildExternalAgentRunActivation,
+  createExternalAgentRunUserMessage,
   shouldActivateExternalAgentRun,
   shouldRevealDelegatedSession,
 } from '@/lib/external-agent-run'
@@ -755,6 +756,20 @@ export function useGlobalAgentListeners(): void {
           return map
         })
 
+        // 外部消息已先在主进程持久化；把同一 UUID 的原文加入 live 消息，
+        // 让当前已打开的会话无需等待完整刷新也能立即看见微信输入。
+        const externalUserMessage = createExternalAgentRunUserMessage(event)
+        if (externalUserMessage) {
+          store.set(liveMessagesMapAtom, (prev) => {
+            const current = prev.get(event.sessionId) ?? []
+            const incomingUuid = (externalUserMessage as unknown as { uuid?: string }).uuid
+            if (current.some((message) => (message as unknown as { uuid?: string }).uuid === incomingUuid)) return prev
+            const map = new Map(prev)
+            map.set(event.sessionId, [...current, externalUserMessage])
+            return map
+          })
+        }
+
         // 协作子 Agent 仅在用户正查看其父会话时才自动展开到右侧工作区。
         // 后台父会话派生子会话时，仍更新运行状态和侧栏树，但不能抢走用户焦点。
         if (
@@ -1304,7 +1319,23 @@ export function useGlobalAgentListeners(): void {
 
         if (payload.kind === 'sdk_message') {
           const msgRecord = payload.message as Record<string, unknown>
-          // 仅在 Agent 发出变更工具调用时展示对应项目组件；右侧 Tab 严格归属产生变更的 session，
+          const currentRun = store.get(agentSessionStreamingStateAtomFamily(sessionId))
+          const messageRunGeneration = msgRecord._promaLiveRunGeneration
+          const messageRunStartedAt = msgRecord._promaLiveRunStartedAt
+          // 与 Delta 相同地隔离运行代际。旧 run 的 SDK 消息可能在用户快速续跑后迟到，
+          // 若直接写进 liveMessages，会把此前的 TaskUpdate 误显示在新任务中。
+          if (
+            currentRun?.runGeneration != null
+            && typeof messageRunGeneration === 'number'
+            && messageRunGeneration !== currentRun.runGeneration
+          ) return
+          if (
+            (currentRun?.runGeneration == null || typeof messageRunGeneration !== 'number')
+            && currentRun?.startedAt != null
+            && typeof messageRunStartedAt === 'number'
+            && messageRunStartedAt !== currentRun.startedAt
+          ) return
+          // 仅在 Agent 发出变更工具调用时展示对应项目组件；右侧 Tab 严格归属产生变更的 session,
           // 同一 workspace 的其他活跃会话不得被后台变更抢走焦点。
           if (!msgRecord.isReplay) {
             const changedComponent = getChangedWorkspaceComponentFromSdkMessage(payload.message)
@@ -1332,7 +1363,8 @@ export function useGlobalAgentListeners(): void {
 
             // 队列自动派发会在上一轮实时消息尚未落盘刷新时开始下一轮。
             // 标记每条实时消息所属 run，渲染层即可把上一轮立即视为完成并自动收起过程块。
-            if (activeRunStartedAt != null) {
+            if (activeRunStartedAt != null && typeof msgRecord._promaLiveRunStartedAt !== 'number') {
+              // 旧 EventBus 协议没有携带 run 标记时保留兼容；新协议已在主进程打标，不能覆盖。
               msgRecord._promaLiveRunStartedAt = activeRunStartedAt
             }
 
