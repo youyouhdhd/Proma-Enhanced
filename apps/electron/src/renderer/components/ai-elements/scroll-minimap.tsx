@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils'
 import { MAX_SEARCH_QUERY_SOURCE_LENGTH } from '@proma/shared'
 import type { SessionMessageSearchResponse, SessionMessageSearchResult } from '@proma/shared'
 import type { SessionMessageSearch } from '@/lib/session-message-search'
+import { getRuntimeNavigationScrollTarget, motionSafeScrollBehavior } from './runtime-navigation'
 
 export interface MinimapItem {
   id: string
@@ -89,6 +90,8 @@ function escapeRegExp(str: string): string {
 
 export function ScrollMinimap({ items, searchMessages, onRevealSearchResult }: ScrollMinimapProps): React.ReactElement | null {
   const { scrollRef, stopScroll, state: stickyState } = useStickToBottomContext()
+  const generatedViewportId = `proma-runtime-${React.useId().replace(/:/g, '')}`
+  const [controlledViewportId, setControlledViewportId] = React.useState(generatedViewportId)
   const [hovered, setHovered] = React.useState(false)
   const [isLeaving, setIsLeaving] = React.useState(false)
   const [visibleIds, setVisibleIds] = React.useState<Set<string>>(new Set())
@@ -117,6 +120,18 @@ export function ScrollMinimap({ items, searchMessages, onRevealSearchResult }: S
   const thumbHeightPctRef = React.useRef(100)
   const thumbRef = React.useRef<HTMLDivElement>(null)
   const searchRequestRef = React.useRef(0)
+
+  React.useEffect(() => {
+    const viewport = scrollRef.current
+    if (!viewport) return
+    const previousId = viewport.id
+    const nextId = previousId || generatedViewportId
+    if (!previousId) viewport.id = nextId
+    setControlledViewportId(nextId)
+    return () => {
+      if (!previousId && viewport.id === nextId) viewport.removeAttribute('id')
+    }
+  }, [generatedViewportId, scrollRef])
 
   // ── 组件卸载时清理计时器 ──
 
@@ -181,7 +196,12 @@ export function ScrollMinimap({ items, searchMessages, onRevealSearchResult }: S
         thumbHeightPctRef.current = nextThumbHeightPct
         setThumbHeightPct(nextThumbHeightPct)
       }
-      if (thumbRef.current) thumbRef.current.style.top = `${thumbTopPct}%`
+      if (thumbRef.current) {
+        const progress = scrollRange > 0 ? Math.round((scrollTop / scrollRange) * 100) : 0
+        thumbRef.current.style.top = `${thumbTopPct}%`
+        thumbRef.current.setAttribute('aria-valuenow', String(progress))
+        thumbRef.current.setAttribute('aria-valuetext', `${progress}%`)
+      }
     }
 
     const visible = new Set<string>()
@@ -274,7 +294,10 @@ export function ScrollMinimap({ items, searchMessages, onRevealSearchResult }: S
     const thumbTopPct = scrollRange > 0
       ? (el.scrollTop / scrollRange) * (100 - thumbHeightPct)
       : 0
+    const progress = scrollRange > 0 ? Math.round((el.scrollTop / scrollRange) * 100) : 0
     thumb.style.top = `${thumbTopPct}%`
+    thumb.setAttribute('aria-valuenow', String(progress))
+    thumb.setAttribute('aria-valuetext', `${progress}%`)
   }, [canScroll, scrollRef, thumbHeightPct])
 
   // ── 面板打开时自动聚焦搜索框 ──
@@ -386,7 +409,7 @@ export function ScrollMinimap({ items, searchMessages, onRevealSearchResult }: S
     const scrollTarget = targetHeight < viewportHeight
       ? offsetTop - (viewportHeight - targetHeight) / 2
       : offsetTop - 32
-    el.scrollTo({ top: Math.max(0, scrollTarget), behavior: 'smooth' })
+    el.scrollTo({ top: Math.max(0, scrollTarget), behavior: motionSafeScrollBehavior() })
 
     setHovered(false)
   }, [scrollRef, stopScroll, stickyState])
@@ -542,7 +565,21 @@ export function ScrollMinimap({ items, searchMessages, onRevealSearchResult }: S
     const clickRatio = (e.clientY - rect.top) / rect.height
     const { scrollHeight, clientHeight } = el
     const targetTop = clickRatio * (scrollHeight - clientHeight)
-    el.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+    el.scrollTo({ top: Math.max(0, targetTop), behavior: motionSafeScrollBehavior() })
+  }, [scrollRef, stopScroll, stickyState])
+
+  const handleThumbKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    const viewport = scrollRef.current
+    if (!viewport) return
+    const target = getRuntimeNavigationScrollTarget(event.key, viewport)
+    if (target === undefined) return
+    event.preventDefault()
+    event.stopPropagation()
+    stopScroll()
+    stickyState.animation = undefined
+    stickyState.velocity = 0
+    stickyState.accumulated = 0
+    viewport.scrollTop = target
   }, [scrollRef, stopScroll, stickyState])
 
   if (items.length < MIN_ITEMS) return null
@@ -687,8 +724,15 @@ export function ScrollMinimap({ items, searchMessages, onRevealSearchResult }: S
         >
           <div
             ref={thumbRef}
+            role="scrollbar"
+            aria-label="运行记录滚动位置"
+            aria-controls={controlledViewportId}
+            aria-orientation="vertical"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            tabIndex={0}
             className={cn(
-              'absolute left-0 right-0 rounded-full transition-colors duration-100 scroll-progress-thumb',
+              'absolute left-0 right-0 rounded-full transition-colors duration-100 scroll-progress-thumb focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
               isDragging
                 ? 'scroll-progress-thumb-active cursor-grabbing'
                 : 'cursor-grab'
@@ -698,6 +742,7 @@ export function ScrollMinimap({ items, searchMessages, onRevealSearchResult }: S
               top: '0%',
             }}
             onMouseDown={handleThumbMouseDown}
+            onKeyDown={handleThumbKeyDown}
           />
         </div>
       </div>}

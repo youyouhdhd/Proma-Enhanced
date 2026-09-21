@@ -7,6 +7,7 @@ import type { ToolActivity } from '@/atoms/agent-atoms'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { TaskProgressCard } from './TaskProgressCard'
 import { aggregateTaskItems, getTaskProgressCounts, isTerminalTaskStatus, type TaskItem } from './task-progress'
+import { motionSafeStickBehavior, nextPendingEventCount } from '@/components/ai-elements/runtime-navigation'
 
 const FINISH_RETENTION_MS = 4_000
 const FADE_OUT_DURATION_MS = 200
@@ -33,6 +34,8 @@ interface TaskProgressOverlayProps {
   /** 仅当前 live turn 的任务工具活动，不传历史 turn。 */
   activities: ToolActivity[]
   streaming: boolean
+  /** 当前会话已渲染的稳定消息组数量；流式 token 不改变该值。 */
+  eventCount: number
   /** 与 Agent 任务并列的系统级短时操作；当前用于上下文压缩。 */
   contextCompaction?: ContextCompactionProgress
 }
@@ -93,8 +96,10 @@ function CompactionProgressDetails({ progress }: { progress: ContextCompactionPr
  * 取代单独的“回到最下方”按钮：任务进行时展示单行进度，点击展开完整任务卡；
  * 无任务时自动退化为原箭头按钮。
  */
-export function TaskProgressOverlay({ activities, streaming, contextCompaction }: TaskProgressOverlayProps): React.ReactElement | null {
+export function TaskProgressOverlay({ activities, streaming, eventCount, contextCompaction }: TaskProgressOverlayProps): React.ReactElement | null {
   const { isAtBottom, scrollToBottom } = useStickToBottomContext()
+  const previousEventCountRef = React.useRef(eventCount)
+  const [pendingEventCount, setPendingEventCount] = React.useState(0)
   const liveItems = React.useMemo(
     () => aggregateTaskItems(activities, false),
     [activities],
@@ -109,6 +114,22 @@ export function TaskProgressOverlay({ activities, streaming, contextCompaction }
   const [visible, setVisible] = React.useState(false)
   const [fading, setFading] = React.useState(false)
   const [open, setOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    const previousEventCount = previousEventCountRef.current
+    previousEventCountRef.current = eventCount
+    setPendingEventCount((pending) => nextPendingEventCount({
+      previousEventCount,
+      eventCount,
+      pendingEventCount: pending,
+      isAtBottom,
+    }))
+  }, [eventCount, isAtBottom])
+
+  const jumpToLatest = React.useCallback(() => {
+    setPendingEventCount(0)
+    scrollToBottom(motionSafeStickBehavior())
+  }, [scrollToBottom])
 
   // liveMessages 在收尾时会被清空；保留最后一份任务快照，才能完成 4 秒反馈。
   React.useEffect(() => {
@@ -200,12 +221,14 @@ export function TaskProgressOverlay({ activities, streaming, contextCompaction }
   if (!showTaskProgress) {
     return (
       <Button
-        className="absolute bottom-[26px] left-1/2 size-10 -translate-x-1/2 rounded-md border border-border/60 bg-background/85 shadow-sm backdrop-blur-sm transition-[background-color,transform] duration-200 hover:bg-accent/80 active:scale-[0.96]"
-        onClick={() => scrollToBottom()}
+        aria-label={pendingEventCount > 0 ? `跳到最新运行结果，${pendingEventCount} 条新增` : '跳到最新运行结果'}
+        className="absolute bottom-[26px] left-1/2 min-h-10 -translate-x-1/2 gap-1.5 rounded-md border border-border/60 bg-background/85 px-3 shadow-sm backdrop-blur-sm transition-[background-color,transform] duration-200 hover:bg-accent/80 active:scale-[0.96]"
+        onClick={jumpToLatest}
         type="button"
         variant="ghost"
       >
         <ArrowDownIcon className="size-4" />
+        {pendingEventCount > 0 && <span className="text-xs tabular-nums">最新 · {pendingEventCount}</span>}
       </Button>
     )
   }
@@ -256,13 +279,14 @@ export function TaskProgressOverlay({ activities, streaming, contextCompaction }
 
       {!isAtBottom && (
         <Button
-          aria-label="回到最下方"
-          className="pointer-events-auto size-10 rounded-md border border-border/60 bg-background/85 shadow-sm backdrop-blur-sm transition-[background-color,transform] duration-200 hover:bg-accent/80 active:scale-[0.96]"
-          onClick={() => scrollToBottom()}
+          aria-label={pendingEventCount > 0 ? `跳到最新运行结果，${pendingEventCount} 条新增` : '跳到最新运行结果'}
+          className="pointer-events-auto min-h-10 gap-1.5 rounded-md border border-border/60 bg-background/85 px-3 shadow-sm backdrop-blur-sm transition-[background-color,transform] duration-200 hover:bg-accent/80 active:scale-[0.96]"
+          onClick={jumpToLatest}
           type="button"
           variant="ghost"
         >
           <ArrowDownIcon className="size-3.5" />
+          {pendingEventCount > 0 && <span className="text-xs tabular-nums">最新 · {pendingEventCount}</span>}
         </Button>
       )}
     </div>

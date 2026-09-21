@@ -1047,7 +1047,7 @@ export const AgentMessages = React.memo(function AgentMessages({
 
   // 在当前 run 的全部 live turn 中汇总任务。压缩边界或后台唤醒会拆开 turn，
   // 不能只取最后一段，否则此前已创建但未再次更新的任务会从进度卡消失。
-  const liveTaskActivities = React.useMemo(() => {
+  const liveRunGroups = React.useMemo(() => {
     const currentRunMessages = (liveMessages ?? []).filter((message) => {
       const record = message as Record<string, unknown>
       const messageRunGeneration = record._promaLiveRunGeneration
@@ -1058,10 +1058,13 @@ export const AgentMessages = React.memo(function AgentMessages({
       return startedAt == null || messageRunStartedAt == null || messageRunStartedAt === startedAt
     })
     return groupIntoTurns(currentRunMessages, sessionModelId)
+  }, [liveMessages, sessionModelId, startedAt, streamState?.runGeneration])
+  const liveTaskActivities = React.useMemo(() => (
+    liveRunGroups
       .flatMap((group) => group.type === 'assistant-turn'
         ? buildTaskProgressDataForTurn(group).taskActivities
         : [])
-  }, [liveMessages, sessionModelId, startedAt, streamState?.runGeneration])
+  ), [liveRunGroups])
 
   const contextCompaction = React.useMemo(
     () => getContextCompactionProgress(liveMessages ?? [], streamState?.isCompacting, streamState?.contextCompaction),
@@ -1269,6 +1272,7 @@ export const AgentMessages = React.memo(function AgentMessages({
           key={sessionId}
           activities={liveTaskActivities}
           streaming={streaming}
+          eventCount={liveRunGroups.length}
           contextCompaction={contextCompaction}
         />
           </Conversation>
