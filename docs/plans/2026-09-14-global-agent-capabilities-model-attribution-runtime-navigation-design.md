@@ -1,12 +1,62 @@
-# Global Agent Capabilities、统一模型归因与长运行导航设计
+# Proma Enhanced v1.14 上游同步、Agent 能力与运行时一致性开发执行指南
 
-- **Status**: Proposed
-- **Date**: 2026-09-14
-- **Scope**: Proma Enhanced
-- **Priority**: P0
+- **Status**: Accepted / In Progress
+- **Created**: 2026-09-14
+- **Updated**: 2026-09-21
+- **Audience**: Proma Enhanced 开发与维护人员
+- **Scope**: 上游主分支同步、每轮实际模型归因、长运行导航补缺、Global Agent Capability Layer
+- **Priority**: P0 → P1
+- **Execution batch**: `20260921-2227-v114-upstream-agent-architecture`
 - **Related**: `docs/plans/2026-06-02-im-model-switch-design.md`
 
-> 本文整合三项需要在下一阶段统一解决的问题：全局 Agent 能力配置、每轮实际模型归因，以及长时间运行时的结果导航与滚动体验。三者都涉及“运行时真实状态”和“UI/渠道如何消费该状态”，因此统一定义数据来源、优先级、持久化与回归测试，避免继续在各渠道复制业务逻辑。
+> 本文是本轮开发的单一执行规格和进度账本。开发只同步已经进入 `proma-ai/Proma` 的 `upstream/main`；任何上游未合并 PR 都不进入合并范围。本仓库 PR #1 只承载本文档，代码开发必须按本文阶段顺序进行，并在每个验证门完成后更新进度记录。
+
+## 0. 执行摘要与不可变边界
+
+### 0.1 当前基线
+
+| 项目 | 基线 |
+|---|---|
+| Enhanced `main` / `origin/main` | `97f8fbd5f4624a30867d156c97585a29ac78002e`（v1.13.2） |
+| 上次已合并的 upstream | `f99edbdb594407ab190b97ae073889c5d96637ab` |
+| 本轮目标 upstream/main | `4e96c5e859302c4a34618d45db352b29a7ebeb28` |
+| 上游增量 | 24 commits / 50 files |
+| 当前 Electron / shared / Pi | `1.13.2` / `0.8.1` / `0.85.1` |
+| 目标开发版本 | Electron `1.14.0`；其他包按实际契约变化递增 |
+
+上游的 `v0.19.57` 与 `v0.19.62` 标签当前都指向 `4e96c5e8`，源码 Electron 版本仍为 `0.19.57`，GitHub Latest Release 仍为 `v0.19.53`。因此本轮只能以提交 SHA 为同步依据，不能用上游标签名称推断内容或稳定性。
+
+### 0.2 不可变边界
+
+1. 只合并 `upstream/main@4e96c5e8`；不合并、cherry-pick 或复制上游开放 PR 分支。
+2. 保留 Enhanced 的 V13/V14 MCP Sharing、ChatGPT capability awareness、Agent Action、本地审批、Workspace 绑定和逐调用授权。
+3. 保留 Enhanced 的 Codex OAuth、Fork Release 来源、自建模型推理档位和显式项目指令边界。
+4. Pi runtime 只使用 Pi；不得重新引入 Claude Agent SDK 或其 session/config 语义。
+5. Global Agent Capability Layer 是 Proma 内部 Agent 装配层；V14 MCP Sharing 是对外暴露层。二者可以共享只读摘要，但不得共享授权状态或绕过各自策略。
+6. 长运行导航复用现有 `StickToBottom`、`ScrollMinimap`、`TaskProgressOverlay` 和位置恢复逻辑；除非现有抽象无法满足测试，不新增平行导航框架。
+7. 配置持久化继续使用 JSON/JSONL 和 `safe-file.ts` 原子写；Secret 只保存引用，不进入能力快照、日志或项目 Overlay。
+8. 每个阶段都必须先通过专项测试，再进入下一阶段；失败时回退当前阶段，不携带未验证代码继续开发。
+
+### 0.3 总体开发顺序
+
+| 阶段 | 内容 | 进入条件 | 完成门槛 | 状态 |
+|---|---|---|---|---|
+| Phase 0 | 修订并合入执行文档 | PR #1 可更新 | 文档、版本和 PR 检查完成 | 待合并 |
+| Phase 1 | 合并 upstream/main | Phase 0 已合入 | 冲突清零；旧功能与上游新增功能测试通过 | 未开始 |
+| Phase 2 | Per-run 模型归因 | Phase 1 基线稳定 | requested/executed/fallback 持久化及跨渠道测试通过 | 未开始 |
+| Phase 3 | 长运行导航补缺 | Phase 2 不再改变消息契约 | 未读计数、键盘、Reduced Motion、锚点与压力验证通过 | 未开始 |
+| Phase 4 | Global Capability Resolver | 前三阶段稳定 | 解析优先级、Deny-Wins、空配置等价和稳定 hash 测试通过 | 未开始 |
+| Phase 5 | Registry、迁移与 Inspector UI | Resolver 契约冻结 | 原子迁移、管理 UI、来源解释和回滚开关通过 | 未开始 |
+| Phase 6 | 集成、版本与发布准备 | 所有验收项完成 | 全量测试、构建、打包冒烟和人工清单完成 | 未开始 |
+
+开发过程中若发现真实代码边界与本文不一致，应先在第 20 节记录证据和调整，再修改阶段范围。不得静默偏离文档。
+
+### 0.4 已知未知项
+
+- Pi 0.86.1 是否改变 Enhanced 受限工具运行的边缘行为，要由 Phase 1 专项测试确认；不能仅凭类型检查判断兼容。
+- Provider/Pi 若没有可靠的 fallback 完成信号，Phase 2 只记录 requested 与实际执行模型，不根据错误文本构造 fallback reason。
+- 2,000+ 事件的性能阈值将在 Phase 3 同一台参考 Windows 环境建立基线后固定；在此之前不承诺虚拟化，也不以主观滚动感受替代测量。
+- Global Registry 的首次迁移可能发现同名但不同配置的 MCP。它们默认保持独立，只有用户确认后才 Promote/合并。
 
 ## 1. 背景与问题定义
 
@@ -34,17 +84,23 @@
 - **Executed Model**：本轮真正执行并产生结果的模型；
 - **Displayed Model**：完成态只能来自 Executed Model。
 
-### 1.3 长时间运行缺少高效定位最新结果的导航
+### 1.3 长运行导航已有基础，但缺少完整验收闭环
 
-工具调用、运行事件、可展示的思考/过程块等持续追加时，运行记录会快速变长。当前体验如果只有鼠标滚轮手动向下，而没有明确可拖动的位置控制、跳到最新入口和“是否继续自动跟随”的状态，长运行会出现：
+当前代码已经具备以下能力：
 
-- 很难快速到达最新结果；
-- 用户向上阅读历史内容时，新增内容可能把视口重新拉回底部；
-- 动态展开/流式增长的工具块改变高度后，阅读位置发生跳动；
-- 极长事件流下，滚动性能和定位能力继续恶化；
-- 用户无法明确知道自己距离最新内容还有多少新增事件。
+- `Conversation` 使用 `use-stick-to-bottom` 管理自动跟随；
+- `ScrollMinimap` 提供消息位置、搜索、轨道点击和可拖动滑块；
+- `TaskProgressOverlay` 在离开底部时提供回到底部入口；
+- `AgentMessages` 在前插历史消息时补偿高度，避免阅读位置跳动；
+- `IntersectionObserver`、`ResizeObserver` 和滚动位置恢复已用于现有链路。
 
-该问题需要作为独立的 Runtime Navigation 能力解决，而不只是增加 CSS 滚动条。
+因此本轮不重新设计导航系统，只补齐经源码核对仍缺少的能力：
+
+- paused 状态下的新增事件数量；
+- 自定义滑块的键盘与 ARIA 等价能力；
+- End / Ctrl+End 与 `prefers-reduced-motion`；
+- 动态 Tool Block 在阅读锚点上方增高时的确定性补偿；
+- 2,000+ 事件压力基线，以及达到实测阈值后才启用的虚拟化。
 
 ## 2. 目标与非目标
 
@@ -56,9 +112,9 @@
 4. Agent 和 UI 都能查看当前实际生效能力及其来源；
 5. 建立 per-run 模型快照，Desktop / Feishu / Remote / History 使用同一归因来源；
 6. fallback 后显示实际执行模型，而不是默认模型；
-7. 长运行中提供可拖动滚动位置、自动跟随/暂停跟随、未读事件计数和一键跳到最新；
-8. 动态内容高度变化时保持阅读锚点；
-9. 为超长事件流预留虚拟化能力；
+7. 在现有长运行导航上补齐未读事件计数、键盘操作与 Reduced Motion；
+8. 验证并补齐动态内容高度变化时的阅读锚点；
+9. 建立超长事件流性能基线，只在数据证明必要时启用虚拟化；
 10. 保持旧项目和旧消息兼容，并提供可回滚迁移路径。
 
 ### 2.2 非目标
@@ -66,7 +122,9 @@
 - 本阶段不新增 Tunnel Provider；
 - 不通过 UI 暴露原本不可见的内部推理或隐藏 Chain of Thought；Runtime Navigation 只作用于当前产品已经允许展示的运行内容；
 - 不重写全部聊天 UI；
-- 不因为此次设计进行整包 upstream merge；
+- 不合并任何尚未进入上游主分支的 PR 分支；
+- 不把 upstream 的版本号、Release 文档或仓库身份覆盖到 Enhanced；
+- 不重复实现现有 ScrollMinimap、Jump-to-bottom 或 StickToBottom 状态管理；
 - 不把完整 Skill 文档、所有 MCP Tool Schema 一次性塞进 Prompt，能力详情继续 Lazy Load。
 
 ## 3. 总体架构
@@ -93,7 +151,9 @@ AssistantMessage / Run Persistence
        ↓
 Desktop / Feishu / Remote / History
        ↓
-Runtime Navigation Controller
+Existing Conversation / ScrollMinimap / TaskProgressOverlay
+       +
+Navigation gap extensions
 ```
 
 核心原则：
@@ -101,9 +161,10 @@ Runtime Navigation Controller
 1. **Single Source of Truth**：能力、模型归因、运行事件都只能有一个权威解析结果；
 2. **Requested != Executed**：默认/请求模型和实际模型是两个概念；
 3. **Required Cannot Be Relaxed**：全局强制策略只能被进一步收紧；
-4. **User Scroll Wins**：用户主动向上阅读时，新增内容不得抢夺视口；
+4. **User Scroll Wins**：继续以 `use-stick-to-bottom` 的现有状态为主，用户主动向上阅读时新增内容不得抢夺视口；
 5. **Lazy Detail**：Agent 先知道能力清单和状态，详细内容按需加载；
-6. **No False Attribution**：拿不到实际模型时显示 Unknown，也不能用静态 Binding 伪造“实际模型”。
+6. **No False Attribution**：拿不到实际模型时显示 Unknown，也不能用静态 Binding 伪造“实际模型”；
+7. **One Merge Source**：上游同步只认 `upstream/main` 的固定 SHA。
 
 ## 4. Global Agent Capability Layer
 
@@ -428,22 +489,30 @@ Fallback: yes
 
 ## 6. 长运行 Runtime Navigation
 
+### 6.0 现有实现基线
+
+本阶段直接扩展以下现有组件：
+
+| 现有模块 | 当前职责 | 本轮增量 |
+|---|---|---|
+| `ai-elements/conversation.tsx` | StickToBottom 容器与回到底部 | 统一可访问名称、Reduced Motion 与键盘行为 |
+| `ai-elements/scroll-minimap.tsx` | 位置条、拖动、轨道点击、消息搜索 | 键盘/ARIA 等价操作；复用现有 Resize/Intersection observer |
+| `agent/TaskProgressOverlay.tsx` | 任务进度与回到底部入口 | paused 新增数量与清零行为 |
+| `agent/AgentMessages.tsx` | 历史/实时消息分层与前插位置补偿 | 动态块锚点回归及必要的最小补偿 |
+| `hooks/useScrollPositionMemory.ts` | 会话切换位置恢复 | 验证与新计数状态互不污染 |
+
+禁止新建与这些组件平行的全局 Store、Controller 或事件总线。只有在专项测试证明现有 `use-stick-to-bottom` 无法表达某一状态时，才允许增加一个局部 hook。
+
 ### 6.1 P0 UX 要求
 
-#### A. 始终提供可拖动的位置控制
+#### A. 完善现有可拖动位置控制
 
-运行内容的实际滚动容器必须支持：
+当前 `ScrollMinimap` 已提供鼠标拖动与轨道点击，不更换实现。需要补齐：
 
-```css
-.runtime-scroll-container {
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-}
-```
-
-不得通过样式隐藏 scrollbar thumb。若平台使用自定义 Scrollbar，也必须提供与原生滚动条等价的拖拽定位、鼠标、触控板和键盘可访问性。
-
-目标是让用户可以直接拖动滑块从超长运行的任意位置跳到靠近底部，而不是只能重复滚轮滚动。
+- 滑块具备 `role="scrollbar"`、`aria-controls`、`aria-valuemin/max/now`；
+- 支持 ArrowUp/ArrowDown、PageUp/PageDown、Home/End；
+- Pointer 和鼠标路径共用同一换算函数，避免行为漂移；
+- 自定义控件不可用时仍保留滚轮、触控板和 Jump-to-latest 基础路径。
 
 #### B. 浮动“跳到最新”入口
 
@@ -529,20 +598,18 @@ jumpToLatest() {
 }
 ```
 
-### 6.3 RuntimeNavigationController
+### 6.3 最小增量状态
+
+不新增 `RuntimeNavigationController`。在现有 Agent transcript 层维护以下最小状态即可：
 
 ```ts
-interface RuntimeNavigationController {
-  onScroll(metrics: ScrollMetrics): void
-  onUserScrollIntent(direction: 'up' | 'down'): void
-  onContentAppended(eventId: string): void
-  onContentResized(eventId: string): void
-  jumpToLatest(): void
-  setFollowMode(enabled: boolean): void
+interface RuntimeNavigationDelta {
+  pendingEventCount: number
+  lastCountedEventId?: string
 }
 ```
 
-该 Controller 只负责导航，不负责解析 Tool/Reasoning 的业务内容。
+`following/paused` 继续由 `useStickToBottomContext().isAtBottom` 与 `stopScroll()` 表达；`pendingEventCount` 只统计 paused 期间新出现的稳定事件或消息组，回到底部、切换会话或点击最新时清零。不得按流式 token 计数。
 
 ### 6.4 运行块折叠
 
@@ -554,9 +621,9 @@ interface RuntimeNavigationController {
 - Running 中的当前块保持状态可见；
 - 折叠行为不能暴露任何原本未展示的内部推理内容。
 
-### 6.5 超长运行虚拟化
+### 6.5 超长运行性能门与条件虚拟化
 
-当 Runtime Event 数量达到阈值后启用列表虚拟化/窗口化，要求：
+先建立 2,000+ Runtime Event 的渲染、滚动和定位性能基线。只有基线未达到验收阈值时才启用列表虚拟化/窗口化。若确需启用，要求：
 
 - Event 必须有稳定 `eventId`；
 - 动态行高可测量；
@@ -565,27 +632,9 @@ interface RuntimeNavigationController {
 - 至少针对 2,000+ Runtime Events 做 E2E 压测；
 - 折叠/展开后虚拟列表重新测量时不丢失用户阅读位置。
 
-### 6.6 可选 Phase 2：Runtime Event Rail
+### 6.6 明确延期项
 
-如果长运行仍然难以导航，可增加右侧事件轨道：
-
-```text
-assistant   ┃
-tool        ●
-tool        ●
-approval    ◆
-error       !
-latest      ▼
-```
-
-支持：
-
-- 点击 marker 跳到事件；
-- 拖动 rail thumb 按事件索引快速定位；
-- Tool / Approval / Error 使用不同语义 marker；
-- 在虚拟化情况下映射到 Event Index，不依赖 DOM 全量渲染。
-
-该能力不是 P0；P0 先完成“可见可拖动 Scrollbar + Following/Paused + Jump to Latest”。
+现有 ScrollMinimap 已承担事件轨道和位置条职责，本轮不再新增第二套 Runtime Event Rail。只有用户测试证明现有位置条无法区分 Tool / Approval / Error 且该区分能显著降低定位时间时，才另立设计任务。
 
 ### 6.7 Accessibility
 
@@ -703,14 +752,15 @@ runtime_navigation (dev/debug only)
 | Feishu Binding / Router | Binding 只负责 requested/default model |
 | Feishu Card Renderer | 从 persisted executed model 渲染 Footer |
 | Desktop / Remote / History | 共用 `resolveExecutedModelDisplay()` |
-| Runtime Transcript / Chat Surface | Scroll container、navigation controller、anchor、Latest button |
-| Runtime Event List | 稳定 eventId、折叠、虚拟化 |
+| Runtime Transcript / Chat Surface | 扩展现有 Conversation、ScrollMinimap、TaskProgressOverlay、anchor 与 Latest button |
+| Runtime Event List | 复用稳定消息/事件 ID；仅在压力基线不达标时虚拟化 |
 
 禁止出现：
 
 - Desktop 一套 Capability Merge，Feishu 再复制一套；
 - Feishu 单独实现模型显示 fallback；
-- 每个 Runtime Block 自己管理 auto-scroll。
+- 每个 Runtime Block 自己管理 auto-scroll；
+- 新建与 `use-stick-to-bottom` 平行的导航状态机。
 
 ## 11. 迁移策略
 
@@ -737,21 +787,16 @@ runtime_navigation (dev/debug only)
 
 Runtime Navigation 默认不改变消息数据格式；先只替换 UI 的滚动/跟随控制。如果现有 Runtime Event 缺少稳定 ID，再单独补事件 ID 迁移。
 
-## 12. Feature Flags 与回滚
+## 12. Feature Flag 与回滚
 
-建议：
-
-```text
-globalAgentProfileV1
-perRunModelAttribution
-runtimeNavigationV1
-```
+只为包含配置迁移和运行入口切换的 Global Capability Layer 增加 `globalAgentProfileV1`。Per-run 模型字段是向后兼容的可选 metadata，导航是现有组件的局部增量，不为它们新增长期 Feature Flag。
 
 回滚原则：
 
 - `globalAgentProfileV1=false`：回到 Legacy Workspace capability loader；
-- `perRunModelAttribution=false`：宁可不显示无法确认的模型，也不要退回错误 Binding 归因；
-- `runtimeNavigationV1=false`：回到原生 Scroll Container，确保基本浏览能力始终可用。
+- 模型归因回滚：停止写入新 metadata；已有数据继续可读，无法确认时不显示模型；
+- 导航回滚：回退局部组件提交，保留现有 StickToBottom、ScrollMinimap 和基本滚动；
+- 任一回滚都不得恢复用当前 Binding 推测历史 executed model 的错误行为。
 
 ## 13. 测试计划
 
@@ -805,8 +850,8 @@ Feishu Message
 6. 拖动 scrollbar thumb 可快速跳到靠近底部；
 7. 上方 Tool Block 增高时保持当前 anchor；
 8. 折叠/展开已完成 Tool Block 不丢失阅读位置；
-9. 2,000+ Runtime Events 下仍可滚动和 Jump-to-Latest；
-10. 虚拟化后 Event ID 跳转正确；
+9. 2,000+ Runtime Events 下记录渲染、滚动和 Jump-to-Latest 性能；
+10. 仅当启用虚拟化时验证 Event ID 跳转正确；
 11. End/Ctrl+End 生效；
 12. Reduced Motion 下不执行强制 smooth scroll；
 13. 用户 paused 时任何流式 token/update 都不能强制拉回底部；
@@ -843,53 +888,166 @@ Feishu Message
 - **NAV-05**：暂停跟随时能看到新增事件数量；
 - **NAV-06**：动态内容增高/展开时阅读锚点保持稳定；
 - **NAV-07**：已完成的长运行块可折叠；
-- **NAV-08**：2,000+ 事件下定位和滚动仍可用；
+- **NAV-08**：2,000+ 事件压力基线达到约定阈值；若未达到，虚拟化后定位和滚动仍可用；
 - **NAV-09**：键盘和 Reduced Motion 满足基本可访问性；
 - **NAV-10**：导航优化不会暴露任何此前不可见的内部推理内容。
 
-## 15. 建议实施顺序
+## 15. 强制实施顺序与验证门
 
-### PR 1 — Shared Contracts & Tests
+本节顺序是依赖顺序，不是建议列表。前一阶段未通过验证门时，不得开始下一阶段的产品代码。
 
-- `GlobalAgentProfile` / `ProjectAgentOverlay` / `EffectiveAgentCapabilities` 类型；
-- `RunModelSnapshot`；
-- Runtime Navigation State / Event ID contract；
-- 先落 Unit Test 和接口，不改主行为。
+### Phase 0 — 执行文档与基线固定
 
-### PR 2 — Per-run Model Attribution
+任务：
 
-- Agent Run 捕获 Executed Model；
-- Assistant Message 持久化；
-- Feishu/Desktop/Remote/History 统一读取；
-- 补完整 fallback 和历史测试。
+1. 将本文从 Proposed 更新为 Accepted / In Progress；
+2. 写入 Enhanced、origin、upstream 的精确 SHA；
+3. 记录只合并 upstream/main、不处理上游 PR 分支的边界；
+4. 根据当前源码修正 Runtime Navigation 范围；
+5. 按仓库规则递增文档提交对应的 Electron patch 版本；
+6. 更新 PR #1 的标题和说明，使其描述最终执行规格；
+7. 合并 PR #1 后，以新的 `main` 创建隔离开发分支与备份分支。
 
-这是最小、最明确、可以先独立交付的 correctness fix。
+验证门：
 
-### PR 3 — Runtime Navigation P0
+- Markdown 围栏闭合、无尾随空白；
+- 文档包含目标、非目标、依赖、迁移、回滚、测试和进度表；
+- PR #1 只包含文档、对应版本和锁文件更新；
+- 主工作区原有未提交文件未进入提交。
 
-- 可见可拖动 Scrollbar；
-- Following/Paused；
-- `↓ 最新 · N`；
-- Resize/Anchor 处理；
-- 键盘与 E2E；
-- 如已有事件量压力，再同时启用虚拟化。
+### Phase 1 — 合并 upstream/main@4e96c5e8
 
-### PR 4 — Global Registry & Resolver
+同步方式：在隔离工作树执行正式 merge，保留双亲历史；不 squash 上游，不 cherry-pick 上游 PR。
 
-- Global Skills Registry；
-- Global MCP Registry；
-- Global Required/Default；
-- Project Overlay；
-- Resolver + effectiveHash；
-- Legacy migration/flag。
+已知直接冲突：
 
-### PR 5 — Management UI & Effective Inspector
+1. `apps/electron/package.json`：保留 Enhanced 版本线和仓库信息，引入 Pi 0.86.1 依赖；
+2. `apps/electron/src/main/lib/agent-collaboration-tools.ts`：同时保留 ask-user schema 与上游 Pi tool-result JSON 序列化；
+3. `apps/electron/src/renderer/components/app-shell/LeftSidebar.tsx`：保留 Enhanced 会话状态清理，接入上游 browser session 清理；
+4. `bun.lock`：不得手工拼接冲突块；先解决 manifest，再由当前 Bun 重建；
+5. `packages/shared/package.json`：保留 Enhanced 独立版本线并按实际共享契约递增。
 
-- Global Agent Profile 设置页；
-- Project Overlay 设置；
-- Effective Capabilities Inspector；
-- Migration Report / Promote-to-Global；
-- 稳定后再评估 Legacy Loader 删除。
+必须逐文件语义复核的重叠区域：
+
+- `pi-agent-adapter.ts`、`pi-builtin-tools.ts`、`pi-utility-adapter.ts`；
+- `agent-orchestrator.ts`、`agent-service.ts`、`ipc.ts`；
+- `pi-model-registry.ts`、`reasoning-profile.ts`、`ChannelForm.tsx`；
+- `AgentMessages.tsx`、`LeftSidebar.tsx`；
+- `sync-runtime-deps.ts`、根依赖 override 与 Pi patch。
+
+需要接入的上游主分支能力：
+
+- Pi runtime 0.86.1、transcript-aware `before_agent_start`、JSON-safe tool results；
+- Utility Runtime 生命周期与 Windows ENOTCONN 重试；
+- Agent task progress 跨 compact/resume 同步；
+- 删除会话/工作区时关闭 browser view；
+- GLM-5.3-FlashX、退役 Codex Spark 清理；
+- WeChat Agent 稳定性、Bridge 自动命名、授权文件路径 Chip；
+- Markdown 表格编辑、侧栏提示和新会话右侧面板默认值。
+
+必须保留的 Enhanced 能力：
+
+- `analysisTools` / `actionTools` 受限运行路径；
+- V14 Agent Action 本地审批和逐调用授权；
+- Direct/Agent execution lease 隔离与 waiting-approval 队列容量；
+- ChatGPT MCP instructions、Discovery fingerprint 和 capability snapshot；
+- Codex OAuth 手动打开浏览器与回调门禁；
+- 自建模型推理档位和 Enhanced Release 来源。
+
+验证门：
+
+```bash
+bun install --frozen-lockfile
+bun test --timeout 30000
+bun run typecheck
+bun run electron:build
+bun run --filter='@proma/electron' check:renderer-boundaries
+bun run --filter='@proma/electron' smoke:renderer-dist
+```
+
+另外执行 Pi/native/Bridge/MCP 专项测试。任何既有 708 项基线测试不得无解释删除或跳过。若上游测试依赖平台行为，应修正测试隔离，不修改产品代码来迎合测试。
+
+### Phase 2 — Per-run 实际模型归因
+
+依赖：Phase 1 已稳定，因为 Pi 0.86.1 会改变运行初始化与 transcript hook。
+
+实施顺序：
+
+1. 在 `packages/shared` 增加最小 `RunModelSnapshot` 契约；
+2. 在模型最终解析处捕获 requested 与 executed，不在 UI 或 Bridge 中推测；
+3. 将快照绑定到本轮 Assistant 输出或运行记录并随会话持久化；
+4. 让 Desktop、Feishu、Slack、WeChat、Remote 和 History 共用一个展示解析函数；
+5. 将 `FeishuGroupBinding.modelId` 等现有字段限定为 requested/default preference；
+6. 老消息无快照时显示 Unknown，不做历史回填；
+7. fallback 只有在运行时能提供可靠信号时记录，不根据错误文本猜测。
+
+专项测试：
+
+- A → B 切换后历史 A 不变；
+- requested A、executed B 时显示 B；
+- 多群、多会话并发不串值；
+- 重启后归因不改变；
+- 老消息显示 Unknown；
+- 运行失败且未产生 Assistant 输出时不写伪快照。
+
+### Phase 3 — 现有长运行导航补缺
+
+依赖：Phase 2 的消息/运行契约已经冻结，避免导航计数随后返工。
+
+实施顺序：
+
+1. 从稳定消息组或 event ID 计算 paused 期间新增数量；
+2. 在现有 Jump-to-bottom/TaskProgressOverlay 展示 `最新 · N`；
+3. 回到底部、切换会话和恢复 following 时清零；
+4. 为 ScrollMinimap thumb 增加 scrollbar ARIA 与键盘控制；
+5. 统一 Reduced Motion 下的 instant scroll；
+6. 用专项测试验证动态高度锚点，只有测试失败时才增加局部补偿；
+7. 运行 2,000+ 事件压力用例，只有指标不达标时才引入现有 `@tanstack/react-virtual`。
+
+本阶段明确不做：新的全局导航 Store、新的事件总线、第二个 minimap、未经基准证明的虚拟化。
+
+### Phase 4 — Global Capability Resolver 核心
+
+依赖：上游和运行展示链路已经稳定。
+
+实施顺序：
+
+1. 定义 `GlobalAgentProfile`、`ProjectAgentOverlay`、`EffectiveAgentCapabilities` 和来源类型；
+2. 先实现纯函数 Resolver 与 BDD 测试，不接 UI；
+3. 实现 Global Required / Global Default / Project / Session / Turn 合并；
+4. Required Enforcement 在所有 Overlay 后再次执行，受保护操作 Deny-Wins；
+5. 缺失 Skill/MCP 引用返回 missing/error，不静默丢弃；
+6. 使用确定性排序和标准 JSON 摘要生成 `effectiveHash`；
+7. Global 为空时必须与现有 Workspace loader 行为等价；
+8. 将 Desktop、Headless、Bridge 与 V14 Delegation 的内部 Agent 构造逐步切换到同一个 Resolver；
+9. V14 对外 `workspace_list` 只能消费脱敏摘要，不能反向改变内部权限。
+
+验证门：第 13.1 节全部测试通过，并增加 Workspace 隔离、附加目录、Automation、Collaboration 和 Agent Action 回归。
+
+### Phase 5 — Registry、迁移与 Inspector UI
+
+实施顺序：
+
+1. 使用 `safe-file.ts` 新增全局 Profile 与 Project Overlay 原子存储；
+2. Global MCP 只保存公开定义和 `credentialRef`，不复制 Secret；
+3. 初次迁移只生成报告，不自动合并名称相似的 Skill/MCP；
+4. 用户显式 Promote 后，Project 才改为引用 Global ID；
+5. Settings 增加 Global Registry 管理；Project 页面增加 Overlay；
+6. Inspector 展示来源、required、ready/error/missing、工具数量与策略摘要；
+7. UI 使用现有 Radix/shadcn primitive、Jotai 和主题变量；
+8. 保留 Legacy Loader 回滚开关，直到两轮稳定发布后再评估删除。
+
+验证门：迁移幂等、原子写失败恢复、凭据不落盘到 Overlay、两个 Project 共享一份 Definition、Required 无法被 UI 放宽。
+
+### Phase 6 — 集成、版本与发布准备
+
+1. Electron 功能版本目标为 `1.14.0`；受影响共享包按实际契约递增；
+2. 生成对应 release notes，更新 README 稳定链接只在正式发布时进行；
+3. 运行 Phase 1 的全部自动验证；
+4. 在 Windows 完成 Pi/native/Bridge/MCP 与安装包冒烟；
+5. 人工验证 Desktop、Feishu 模型归因、长运行导航和两个 Project 的 Global Capability 继承；
+6. 验证失败时回滚到最后一个阶段提交，不移动已发布 Tag；
+7. 所有门槛通过后再决定 Tag、Release 和 Latest 标记。
 
 ## 16. 安全与隐私
 
@@ -903,26 +1061,57 @@ Feishu Message
 
 ## 17. Upstream 策略
 
-当前阶段不应因为这三项工作做无差别 upstream merge。Proma Enhanced 已在 MCP、Remote、Feishu、Agent Orchestration 等区域形成较深改造，后续继续按类别处理：
+### 17.1 唯一同步来源
 
-| 上游变化 | 建议 |
-|---|---|
-| Provider SDK / Auth | 优先同步 |
-| Model Catalog | 优先同步 |
-| 通用 Agent Session Bug | 审查后同步 |
-| 通用工具 Bug | Cherry-pick |
-| UI 小修 | 按价值选择 |
-| Workspace / Agent Orchestrator | 手工 Port |
-| 上游 MCP 架构 | 不直接覆盖 Enhanced |
-| Feishu / Remote | 逐文件比较 |
-| Release / Docs / Version | 通常不需要单独同步 |
+本轮唯一同步对象是：
 
-能力解析、运行模型归因和 Session State 都属于 fork 深改区域，应优先保护 Enhanced 的单一真相来源，而不是依赖整包 merge 修复。
+```text
+remote: upstream
+repository: proma-ai/Proma
+branch: main
+commit: 4e96c5e859302c4a34618d45db352b29a7ebeb28
+previous merged commit: f99edbdb594407ab190b97ae073889c5d96637ab
+```
+
+上游开放 PR 无论是否 CLEAN、是否由 Enhanced 作者提交、是否与本计划相关，在进入 upstream/main 前都不进入本轮合并。后续若 PR 正式合入 upstream/main，将在下一次上游同步中按新的主分支 SHA统一处理。
+
+### 17.2 合并方式
+
+1. 创建 `backup/pre-upstream-v1.14.0` 指向合并前 main；
+2. 创建隔离分支 `sync/upstream-20260921-v1.14.0`；
+3. 在隔离 worktree 执行 `git merge --no-ff upstream/main`；
+4. 先解决两个 manifests 和两个产品文件冲突，再重建 `bun.lock`；
+5. 对 17 个共同修改文件做语义审查，即使 Git 自动合并也不能直接视为正确；
+6. 完成专项和全量验证后再将同步分支合入 Enhanced main；
+7. 不改写、移动或复用已有 v1.13.x 标签。
+
+### 17.3 冲突判断原则
+
+- 上游提供通用 runtime 修复，Enhanced 提供产品策略时：保留上游机制，重新接入 Enhanced 策略；
+- 上游修改 Pi 接口时：迁移 Enhanced 的 `analysisTools/actionTools`，不能保留旧 API 调用；
+- 双方都改模型目录时：以新上游模型清单为基础，重新应用 Enhanced 自定义 reasoning 扩展；
+- 双方都改 IPC/UI 时：四层契约一起核对，不允许只解决编译冲突；
+- 版本、仓库 URL、Release 源和 README 链接始终以 Enhanced 为准；
+- `bun.lock` 始终由最终 manifests 使用 Bun 生成，不采纳任一侧的冲突块拼接结果。
+
+### 17.4 同步回滚
+
+出现以下任一情况时停止 Phase 1 并回到备份分支：
+
+- Pi runtime 无法完成正常 Agent、受限 Analysis 或 Action 三条路径；
+- Workspace 指令边界、附加目录或权限撤销出现回归；
+- Codex OAuth、MCP Sharing、Bridge 或 Release 来源被覆盖；
+- 全量测试出现无法归因的新增失败；
+- 打包后的 Pi/native runtime 与 manifests 版本不一致。
 
 ## 18. Definition of Done
 
 该设计完成的标准不是“页面上出现了三个新功能”，而是：
 
+- [ ] PR #1 已作为本轮执行规格合入，后续范围调整均有记录；
+- [ ] `upstream/main@4e96c5e8` 已通过正式 merge 进入 Enhanced，待合并上游提交为 0；
+- [ ] Pi 0.86.1、Utility Runtime、task progress、browser cleanup 和模型目录更新完成回归；
+- [ ] V13/V14、Codex OAuth、自建 reasoning 与 Enhanced Release 边界未被覆盖；
 - [ ] 所有 Agent 入口统一使用 Capability Resolver；
 - [ ] Global / Project / Session / Turn 优先级有自动化测试；
 - [ ] Required Constraints 无法被绕过；
@@ -933,7 +1122,7 @@ Feishu Message
 - [ ] 用户向上阅读期间不会被强制自动滚回；
 - [ ] 动态 Runtime Block 不破坏阅读锚点；
 - [ ] 超长运行通过性能/E2E 验证；
-- [ ] Legacy Migration 和 Feature Flag 可回滚；
+- [ ] Legacy Migration 和 `globalAgentProfileV1` 可回滚；
 - [ ] 文档、类型、迁移、Unit/Integration/E2E 测试全部合入。
 
 ## 19. Decision Log
@@ -946,4 +1135,21 @@ Feishu Message
 6. **Runtime Navigation P0 必须包含可拖动滚动位置 + Jump-to-Latest，而不是只优化滚轮速度。**
 7. **用户主动滚动优先于自动跟随。**
 8. **导航功能不得扩大内部推理暴露范围。**
-9. **当前阶段不依赖 upstream merge 解决上述架构问题。**
+9. **上游同步只合并 upstream/main 的固定 SHA，不处理未合并 PR 分支。**
+10. **先完成上游同步，再冻结新的运行与持久化契约。**
+11. **复用现有导航组件；新增 Controller、Store、事件轨道和虚拟化都需要测试或基准证明。**
+12. **只有 Global Capability 迁移保留长期 Feature Flag；兼容 metadata 与局部 UI 增量用提交级回滚。**
+
+## 20. 执行进度与调整日志
+
+该表随开发提交更新。`完成` 必须附验证证据；`调整` 必须说明触发证据和对后续阶段的影响。
+
+| 时间 | 阶段 | 状态 | 证据 / 调整 |
+|---|---|---|---|
+| 2026-09-21 22:27 +08:00 | Phase 0 | 进行中 | 确认 Enhanced `97f8fbd5`、upstream `4e96c5e8`；建立文档工作树。 |
+| 2026-09-21 22:27 +08:00 | 范围调整 | 完成 | 用户明确只合并 upstream/main；所有上游开放 PR 从本轮范围移除。 |
+| 2026-09-21 22:27 +08:00 | 导航基线 | 完成 | 源码确认已有 StickToBottom、ScrollMinimap、Jump-to-bottom、observer 和位置补偿；Phase 3 改为补缺。 |
+| 2026-09-21 22:27 +08:00 | 合并预演 | 完成 | `git merge-tree` 确认 5 个文本冲突、17 个双方共同修改文件。 |
+| 2026-09-21 22:34 +08:00 | Phase 0 文档修订 | 待合并 | 规格更新为 1,155 行；54 个代码围栏闭合、无尾随空白；frozen lockfile 与全 workspace typecheck 通过；Electron 版本递增至 1.13.3。 |
+
+后续每个阶段至少记录：开始 SHA、结束 SHA、版本、修改范围、测试结果、已知限制、是否影响下一阶段。
