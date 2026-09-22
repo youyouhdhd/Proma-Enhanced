@@ -820,6 +820,13 @@ export interface ElectronAPI {
   /** 获取工作区能力摘要 */
   getWorkspaceCapabilities: (workspaceSlug: string) => Promise<WorkspaceCapabilities>
 
+  getAgentCapabilityManagement: () => Promise<import('@proma/shared').AgentCapabilityManagementSnapshot>
+  setGlobalAgentCapabilitiesEnabled: (enabled: boolean) => Promise<import('@proma/shared').AgentCapabilityManagementSnapshot>
+  updateGlobalAgentCapabilityProfile: (profile: import('@proma/shared').GlobalAgentProfile) => Promise<import('@proma/shared').AgentCapabilityManagementSnapshot>
+  updateProjectAgentCapabilityOverlay: (workspaceSlug: string, overlay: import('@proma/shared').AgentCapabilityOverlay) => Promise<import('@proma/shared').AgentCapabilityManagementSnapshot>
+  promoteProjectAgentCapability: (input: import('@proma/shared').PromoteAgentCapabilityInput) => Promise<import('@proma/shared').AgentCapabilityManagementSnapshot>
+  removeGlobalAgentCapability: (input: import('@proma/shared').RemoveGlobalAgentCapabilityInput) => Promise<import('@proma/shared').AgentCapabilityManagementSnapshot>
+
   /** 获取工作区 MCP 配置 */
   getWorkspaceMcpConfig: (workspaceSlug: string) => Promise<WorkspaceMcpConfig>
 
@@ -2333,6 +2340,13 @@ const electronAPI: ElectronAPI = {
   getWorkspaceCapabilities: (workspaceSlug: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_CAPABILITIES, workspaceSlug)
   },
+
+  getAgentCapabilityManagement: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_CAPABILITY_MANAGEMENT),
+  setGlobalAgentCapabilitiesEnabled: (enabled: boolean) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_GLOBAL_CAPABILITIES_ENABLED, enabled),
+  updateGlobalAgentCapabilityProfile: (profile: import('@proma/shared').GlobalAgentProfile) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_GLOBAL_CAPABILITY_PROFILE, profile),
+  updateProjectAgentCapabilityOverlay: (workspaceSlug: string, overlay: import('@proma/shared').AgentCapabilityOverlay) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_PROJECT_CAPABILITY_OVERLAY, workspaceSlug, overlay),
+  promoteProjectAgentCapability: (input: import('@proma/shared').PromoteAgentCapabilityInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.PROMOTE_PROJECT_CAPABILITY, input),
+  removeGlobalAgentCapability: (input: import('@proma/shared').RemoveGlobalAgentCapabilityInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.REMOVE_GLOBAL_CAPABILITY, input),
 
   getWorkspaceMcpConfig: (workspaceSlug: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_MCP_CONFIG, workspaceSlug)

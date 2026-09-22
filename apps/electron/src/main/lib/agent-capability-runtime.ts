@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import type {
   AgentCapabilityOverlay,
   EffectiveAgentCapabilities,
@@ -9,6 +10,10 @@ import {
   resolveEffectiveAgentCapabilities,
   type ProjectAgentCapabilityState,
 } from './agent-capability-resolver'
+import {
+  getGlobalAgentCapabilityConfig,
+  getProjectAgentCapabilityOverlay,
+} from './agent-capability-store'
 
 export interface ResolveWorkspaceAgentCapabilitiesOptions {
   globalProfile?: GlobalAgentProfile
@@ -23,7 +28,7 @@ export function buildProjectAgentCapabilityState(workspaceSlug: string | undefin
   const skills = getWorkspaceSkills(workspaceSlug).map((skill) => ({
     id: `workspace:${workspaceSlug}:skill:${skill.slug}`,
     slug: skill.slug,
-    directory: skillsDirectory,
+    directory: join(skillsDirectory, skill.slug),
     enabled: skill.enabled,
   }))
   const mcpServers = Object.entries(getWorkspaceMcpConfig(workspaceSlug).servers ?? {}).map(([name, server]) => ({
@@ -40,10 +45,14 @@ export function resolveWorkspaceAgentCapabilities(
   workspaceSlug: string | undefined,
   options: ResolveWorkspaceAgentCapabilitiesOptions = {},
 ): EffectiveAgentCapabilities {
+  const stored = getGlobalAgentCapabilityConfig()
+  const globalProfile = options.globalProfile ?? (stored.enabled ? stored.profile : undefined)
+  const projectOverlay = options.projectOverlay
+    ?? (stored.enabled && workspaceSlug ? getProjectAgentCapabilityOverlay(workspaceSlug) : undefined)
   return resolveEffectiveAgentCapabilities({
-    globalProfile: options.globalProfile,
+    globalProfile,
     project: buildProjectAgentCapabilityState(workspaceSlug),
-    projectOverlay: options.projectOverlay,
+    projectOverlay,
     sessionOverlay: options.sessionOverlay,
     turnOverlay: options.turnOverlay,
   })

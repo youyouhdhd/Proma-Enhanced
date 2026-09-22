@@ -179,7 +179,7 @@ export function resolveEffectiveAgentCapabilities(
       id: entry.id,
       slug: entry.slug,
       directory: entry.directory,
-      resolution: resolution(required ? 'global-required' : 'global-default', enabled, required),
+      resolution: resolution(required ? 'global-required' : 'global-default', enabled, required, entry.status, entry.reason),
     })
   }
   for (const entry of profile.mcpServers) {
@@ -190,7 +190,7 @@ export function resolveEffectiveAgentCapabilities(
       name: entry.name,
       server: entry.server,
       credentialScope: entry.credentialScope,
-      resolution: resolution(required ? 'global-required' : 'global-default', enabled, required),
+      resolution: resolution(required ? 'global-required' : 'global-default', enabled, required, entry.status, entry.reason),
     })
   }
   for (const entry of profile.instructions) {
@@ -199,7 +199,7 @@ export function resolveEffectiveAgentCapabilities(
     instructions.set(entry.id, {
       id: entry.id,
       text: entry.text,
-      resolution: resolution(required ? 'global-required' : 'global-default', enabled, required),
+      resolution: resolution(required ? 'global-required' : 'global-default', enabled, required, entry.status, entry.reason),
     })
   }
 

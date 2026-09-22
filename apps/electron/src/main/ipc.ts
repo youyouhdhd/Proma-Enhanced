@@ -69,6 +69,11 @@ import type {
   BulkImportWorkspaceSelection,
   SkillFileContent,
   WorkspaceCapabilities,
+  AgentCapabilityManagementSnapshot,
+  AgentCapabilityOverlay,
+  GlobalAgentProfile,
+  PromoteAgentCapabilityInput,
+  RemoveGlobalAgentCapabilityInput,
   WorkspaceMemorySummary,
   FileEntry,
   FileSearchResult,
@@ -369,6 +374,14 @@ import {
   removeWorktreeRepo,
   cleanupStaleWorkspaceAttachedPaths,
 } from './lib/agent-workspace-manager'
+import {
+  deleteGlobalAgentCapability,
+  getAgentCapabilityManagementSnapshot,
+  promoteProjectAgentCapability,
+  setGlobalAgentCapabilitiesEnabled,
+  updateGlobalAgentProfile,
+  updateProjectAgentCapabilityOverlay,
+} from './lib/agent-capability-management'
 import { movePathSafely } from './lib/file-move-service'
 import { subscribeWorkspaceMemoryChanges } from './lib/workspace-memory-change-watcher'
 import { confirmWorkspaceMemoryWindowClose, markWorkspaceMemoryWindowReady } from './lib/workspace-memory-window'
@@ -3346,6 +3359,51 @@ export function registerIpcHandlers(): void {
     async (_, workspaceSlug: string): Promise<WorkspaceCapabilities> => {
       return getWorkspaceCapabilities(workspaceSlug)
     }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_CAPABILITY_MANAGEMENT,
+    async (): Promise<AgentCapabilityManagementSnapshot> => getAgentCapabilityManagementSnapshot(),
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SET_GLOBAL_CAPABILITIES_ENABLED,
+    async (_, enabled: boolean): Promise<AgentCapabilityManagementSnapshot> => {
+      if (typeof enabled !== 'boolean') throw new Error('enabled 必须是 boolean')
+      return setGlobalAgentCapabilitiesEnabled(enabled)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_GLOBAL_CAPABILITY_PROFILE,
+    async (_, profile: GlobalAgentProfile): Promise<AgentCapabilityManagementSnapshot> => {
+      if (!profile || typeof profile !== 'object') throw new Error('Global Agent Profile 无效')
+      return updateGlobalAgentProfile(profile)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_PROJECT_CAPABILITY_OVERLAY,
+    async (_, workspaceSlug: string, overlay: AgentCapabilityOverlay): Promise<AgentCapabilityManagementSnapshot> => {
+      if (typeof workspaceSlug !== 'string' || !workspaceSlug.trim()) throw new Error('workspaceSlug 无效')
+      if (!overlay || typeof overlay !== 'object') throw new Error('Project Overlay 无效')
+      return updateProjectAgentCapabilityOverlay(workspaceSlug, overlay)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.PROMOTE_PROJECT_CAPABILITY,
+    async (_, input: PromoteAgentCapabilityInput): Promise<AgentCapabilityManagementSnapshot> => {
+      if (!input || typeof input !== 'object' || typeof input.workspaceSlug !== 'string' || typeof input.projectCapabilityId !== 'string') {
+        throw new Error('Promote 参数无效')
+      }
+      if (input.kind !== 'skill' && input.kind !== 'mcp') throw new Error('Promote 类型无效')
+      return promoteProjectAgentCapability(input)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.REMOVE_GLOBAL_CAPABILITY,
+    async (_, input: RemoveGlobalAgentCapabilityInput): Promise<AgentCapabilityManagementSnapshot> => {
+      if (!input || typeof input !== 'object' || typeof input.id !== 'string') throw new Error('Remove 参数无效')
+      if (input.kind !== 'skill' && input.kind !== 'mcp' && input.kind !== 'instruction') throw new Error('Remove 类型无效')
+      return deleteGlobalAgentCapability(input)
+    },
   )
 
   // 获取工作区 MCP 配置

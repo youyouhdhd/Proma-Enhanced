@@ -1315,6 +1315,9 @@ export interface GlobalAgentSkillRegistryEntry {
   directory: string
   defaultEnabled: boolean
   required?: boolean
+  /** 运行时诊断，不应作为用户配置写入。 */
+  status?: AgentCapabilityStatus
+  reason?: string
 }
 
 export interface GlobalAgentMcpRegistryEntry {
@@ -1325,6 +1328,8 @@ export interface GlobalAgentMcpRegistryEntry {
   credentialScope?: string
   defaultEnabled: boolean
   required?: boolean
+  status?: AgentCapabilityStatus
+  reason?: string
 }
 
 export interface GlobalAgentInstructionEntry {
@@ -1332,6 +1337,8 @@ export interface GlobalAgentInstructionEntry {
   text: string
   defaultEnabled: boolean
   required?: boolean
+  status?: AgentCapabilityStatus
+  reason?: string
 }
 
 export interface AgentModelDefaults {
@@ -1398,6 +1405,42 @@ export interface EffectiveAgentCapabilities {
     requiredDeniedTools: string[]
   }
   model?: AgentModelDefaults & { source: AgentCapabilitySource }
+}
+
+export interface GlobalAgentCapabilityConfig {
+  schemaVersion: 1
+  enabled: boolean
+  profile: GlobalAgentProfile
+}
+
+export interface AgentCapabilityMigrationCandidate {
+  kind: 'skill' | 'mcp'
+  projectCapabilityId: string
+  name: string
+  reason: 'not_global' | 'same_name_different_definition'
+}
+
+export interface AgentCapabilityWorkspaceSnapshot {
+  workspace: Pick<AgentWorkspace, 'id' | 'name' | 'slug'>
+  overlay: ProjectAgentOverlay
+  effective: EffectiveAgentCapabilities
+  migrationCandidates: AgentCapabilityMigrationCandidate[]
+}
+
+export interface AgentCapabilityManagementSnapshot {
+  config: GlobalAgentCapabilityConfig
+  workspaces: AgentCapabilityWorkspaceSnapshot[]
+}
+
+export interface PromoteAgentCapabilityInput {
+  workspaceSlug: string
+  kind: 'skill' | 'mcp'
+  projectCapabilityId: string
+}
+
+export interface RemoveGlobalAgentCapabilityInput {
+  kind: 'skill' | 'mcp' | 'instruction'
+  id: string
 }
 
 // ===== Agent 发送输入 =====
@@ -2024,6 +2067,13 @@ export const AGENT_IPC_CHANNELS = {
   // 工作区能力（MCP + Skill）
   /** 获取工作区能力摘要 */
   GET_CAPABILITIES: 'agent:get-capabilities',
+  /** 获取 Global Registry、Project Overlay、Effective Inspector 与迁移候选。 */
+  GET_CAPABILITY_MANAGEMENT: 'agent:get-capability-management',
+  SET_GLOBAL_CAPABILITIES_ENABLED: 'agent:set-global-capabilities-enabled',
+  UPDATE_GLOBAL_CAPABILITY_PROFILE: 'agent:update-global-capability-profile',
+  UPDATE_PROJECT_CAPABILITY_OVERLAY: 'agent:update-project-capability-overlay',
+  PROMOTE_PROJECT_CAPABILITY: 'agent:promote-project-capability',
+  REMOVE_GLOBAL_CAPABILITY: 'agent:remove-global-capability',
   /** 获取工作区 MCP 配置 */
   GET_MCP_CONFIG: 'agent:get-mcp-config',
   /** 保存工作区 MCP 配置 */

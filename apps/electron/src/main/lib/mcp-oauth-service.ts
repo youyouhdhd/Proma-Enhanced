@@ -560,6 +560,19 @@ export function getMcpApiKeyEnvironment(
   return { [credential.envName]: credential.value }
 }
 
+/** 在主进程 Keychain 边界内复制 MCP 凭据；调用方只能得到是否存在，绝不接触明文。 */
+export function copyMcpCredentialScope(
+  sourceScope: string,
+  sourceServerName: string,
+  targetScope: string,
+  targetServerName: string,
+): boolean {
+  const credential = readCredential(sourceScope, sourceServerName)
+  if (!credential) return false
+  saveCredential(targetScope, targetServerName, credential)
+  return true
+}
+
 /** Resolve a current authentication header for a configured remote MCP without exposing its token to the renderer. */
 export async function getMcpOAuthHeaders(workspaceSlug: string, serverName: string, serverUrl: string): Promise<Record<string, string> | undefined> {
   let credential = readCredential(workspaceSlug, serverName)

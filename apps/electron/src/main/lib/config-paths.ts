@@ -344,6 +344,23 @@ export function getWorkspaceMcpPath(slug: string): string {
   return join(getAgentWorkspacePath(slug), 'mcp.json')
 }
 
+/** 全局 Agent Capability Profile（不含任何明文凭据）。 */
+export function getGlobalAgentCapabilitiesPath(): string {
+  return join(getConfigDir(), 'agent-capabilities.json')
+}
+
+/** 全局 Skill Registry 的实体目录。 */
+export function getGlobalAgentSkillsDir(): string {
+  const dir = join(getConfigDir(), 'agent-capabilities', 'skills')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** 项目仅保存相对 Global Profile 的能力差异。 */
+export function getWorkspaceAgentCapabilityOverlayPath(slug: string): string {
+  return join(getAgentWorkspacePath(slug), 'capabilities.json')
+}
+
 /**
  * 获取指定工作区的 Skills 目录路径
  *
