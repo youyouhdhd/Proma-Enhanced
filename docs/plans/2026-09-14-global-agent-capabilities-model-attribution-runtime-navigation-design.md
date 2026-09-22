@@ -22,7 +22,7 @@
 | 本轮目标 upstream/main | `4e96c5e859302c4a34618d45db352b29a7ebeb28` |
 | 上游增量 | 24 commits / 50 files |
 | 当前 Electron / shared / Pi | `1.13.2` / `0.8.1` / `0.85.1` |
-| 当前开发版本 | Phase 1：Electron/shared `1.14.0`/`0.9.0`；Phase 2：Electron/shared/session-core `1.14.1`/`0.10.0`/`0.2.0`；Phase 3：Electron `1.14.2` |
+| 当前开发版本 | Phase 1：Electron/shared `1.14.0`/`0.9.0`；Phase 2：Electron/shared/session-core `1.14.1`/`0.10.0`/`0.2.0`；Phase 3：Electron `1.14.2`；Phase 4：Electron/shared `1.15.0`/`0.11.0` |
 
 上游的 `v0.19.57` 与 `v0.19.62` 标签当前都指向 `4e96c5e8`，源码 Electron 版本仍为 `0.19.57`，GitHub Latest Release 仍为 `v0.19.53`。因此本轮只能以提交 SHA 为同步依据，不能用上游标签名称推断内容或稳定性。
 
@@ -44,8 +44,8 @@
 | Phase 0 | 修订并合入执行文档 | PR #1 可更新 | 文档、版本和 PR 检查完成 | 完成 |
 | Phase 1 | 合并 upstream/main | Phase 0 已合入 | 冲突清零；旧功能与上游新增功能测试通过 | 完成 |
 | Phase 2 | Per-run 模型归因 | Phase 1 基线稳定 | requested/executed/fallback 持久化及跨渠道测试通过 | 完成 |
-| Phase 3 | 长运行导航补缺 | Phase 2 不再改变消息契约 | 未读计数、键盘、Reduced Motion、锚点与压力验证通过 | 自动验证通过，待提交 |
-| Phase 4 | Global Capability Resolver | 前三阶段稳定 | 解析优先级、Deny-Wins、空配置等价和稳定 hash 测试通过 | 未开始 |
+| Phase 3 | 长运行导航补缺 | Phase 2 不再改变消息契约 | 未读计数、键盘、Reduced Motion、锚点与压力验证通过 | 完成 |
+| Phase 4 | Global Capability Resolver | 前三阶段稳定 | 解析优先级、Deny-Wins、空配置等价和稳定 hash 测试通过 | 验证通过，待提交 |
 | Phase 5 | Registry、迁移与 Inspector UI | Resolver 契约冻结 | 原子迁移、管理 UI、来源解释和回滚开关通过 | 未开始 |
 | Phase 6 | 集成、版本与发布准备 | 所有验收项完成 | 全量测试、构建、打包冒烟和人工清单完成 | 未开始 |
 
@@ -1022,6 +1022,8 @@ bun run --filter='@proma/electron' smoke:renderer-dist
 8. 将 Desktop、Headless、Bridge 与 V14 Delegation 的内部 Agent 构造逐步切换到同一个 Resolver；
 9. V14 对外 `workspace_list` 只能消费脱敏摘要，不能反向改变内部权限。
 
+实现边界调整：用户项目 `AGENTS.md` 继续由 `project-instruction-resolver.ts` 按显式项目根解析，不复制进 Global Registry；Global Instructions 由 Resolver 追加到系统提示词。这样既统一运行入口，又保留两类指令不同的所有权和动态更新边界。
+
 验证门：第 13.1 节全部测试通过，并增加 Workspace 隔离、附加目录、Automation、Collaboration 和 Agent Action 回归。
 
 ### Phase 5 — Registry、迁移与 Inspector UI
@@ -1156,5 +1158,7 @@ previous merged commit: f99edbdb594407ab190b97ae073889c5d96637ab
 | 2026-09-21 22:49 +08:00 | Phase 1 验证 | 待提交 | 712 tests / 0 fail、全 workspace typecheck、Electron build、Renderer 439 文件边界、798 产物 smoke、MCP CJS/Electron bundle smoke 和 Pi 0.86.1 包内版本核对通过。 |
 | 2026-09-21 23:26 +08:00 | Phase 2 | 待提交 | 新增 `RunModelSnapshot`，实际模型随 assistant/result/delta 写入现有 JSONL/事件链；飞书终态不再读取当前 Binding。716 tests / 0 fail、typecheck、Electron build、Renderer 边界与产物 smoke 通过。 |
 | 2026-09-21 23:36 +08:00 | Phase 3 | 待提交 | 复用 TaskProgressOverlay/ScrollMinimap：paused 期间按 live 稳定消息组显示“最新 · N”，回到底部清零；thumb 增加 scrollbar ARIA、Home/End/方向/Page 键；Reduced Motion 使用 instant/auto。2,000 次状态增量测试通过，未引入虚拟化。720 tests / 0 fail、typecheck、Electron build、440 文件 Renderer 边界与产物 smoke 通过；2,000 DOM 事件人工体验留在 Phase 6。 |
+| 2026-09-22 10:24 +08:00 | Phase 4 | 验证中 | 新增纯 Resolver、来源/状态契约、Required/Default/Project/Session/Turn 合并、Deny-Wins、missing/error 与 SHA-256 effectiveHash；AgentOrchestrator 单一入口已消费 Resolver 生成的 MCP、Skill、Global Instructions 与工具拒绝策略。空 Global 配置继续从原 Workspace MCP/Skills 构造等价结果。 |
+| 2026-09-22 10:26 +08:00 | Phase 4 验证 | 待提交 | Required 同 ID 覆盖防护、空 Global 等价、稳定 hash、Workspace/项目指令/V14 权限回归通过。727 tests / 0 fail、typecheck、Electron build、440 文件 Renderer 边界与 798 产物 smoke 通过。 |
 
 后续每个阶段至少记录：开始 SHA、结束 SHA、版本、修改范围、测试结果、已知限制、是否影响下一阶段。

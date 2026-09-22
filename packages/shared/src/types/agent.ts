@@ -1296,6 +1296,110 @@ export interface WorkspaceCapabilities {
   memory: WorkspaceMemorySummary
 }
 
+// ===== Global Agent Capability Layer =====
+
+export type AgentCapabilitySource = 'global-required' | 'global-default' | 'project' | 'session' | 'turn'
+export type AgentCapabilityStatus = 'ready' | 'disabled' | 'error' | 'missing'
+
+export interface AgentCapabilityResolutionMeta {
+  source: AgentCapabilitySource
+  enabled: boolean
+  required: boolean
+  status: AgentCapabilityStatus
+  reason?: string
+}
+
+export interface GlobalAgentSkillRegistryEntry {
+  id: string
+  slug: string
+  directory: string
+  defaultEnabled: boolean
+  required?: boolean
+}
+
+export interface GlobalAgentMcpRegistryEntry {
+  id: string
+  name: string
+  server: McpServerEntry
+  /** Keychain 凭据命名空间；缺省使用全局 Registry scope。 */
+  credentialScope?: string
+  defaultEnabled: boolean
+  required?: boolean
+}
+
+export interface GlobalAgentInstructionEntry {
+  id: string
+  text: string
+  defaultEnabled: boolean
+  required?: boolean
+}
+
+export interface AgentModelDefaults {
+  channelId?: string
+  modelId?: string
+}
+
+export interface GlobalAgentProfile {
+  schemaVersion: 1
+  skills: GlobalAgentSkillRegistryEntry[]
+  mcpServers: GlobalAgentMcpRegistryEntry[]
+  instructions: GlobalAgentInstructionEntry[]
+  toolPolicy: {
+    requiredDeniedTools: string[]
+    defaultDeniedTools: string[]
+  }
+  defaultModel?: AgentModelDefaults
+}
+
+export interface AgentCapabilityOverlay {
+  inheritGlobal?: boolean
+  skills?: { enable?: string[]; disable?: string[] }
+  mcpServers?: { enable?: string[]; disable?: string[] }
+  instructions?: {
+    enable?: string[]
+    disable?: string[]
+    add?: Array<{ id: string; text: string }>
+  }
+  toolPolicy?: { allow?: string[]; deny?: string[] }
+  model?: AgentModelDefaults
+}
+
+export type ProjectAgentOverlay = AgentCapabilityOverlay
+
+export interface ResolvedAgentSkill {
+  id: string
+  slug: string
+  directory: string
+  resolution: AgentCapabilityResolutionMeta
+}
+
+export interface ResolvedAgentMcpServer {
+  id: string
+  name: string
+  server: McpServerEntry
+  credentialScope?: string
+  resolution: AgentCapabilityResolutionMeta
+}
+
+export interface ResolvedAgentInstruction {
+  id: string
+  text: string
+  resolution: AgentCapabilityResolutionMeta
+}
+
+export interface EffectiveAgentCapabilities {
+  resolverVersion: 1
+  effectiveHash: string
+  skills: ResolvedAgentSkill[]
+  mcpServers: ResolvedAgentMcpServer[]
+  instructions: ResolvedAgentInstruction[]
+  toolPolicy: {
+    deniedTools: string[]
+    requiredDeniedTools: string[]
+  }
+  model?: AgentModelDefaults & { source: AgentCapabilitySource }
+}
+
 // ===== Agent 发送输入 =====
 
 /**

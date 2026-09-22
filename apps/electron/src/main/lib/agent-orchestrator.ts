@@ -20,7 +20,7 @@ import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { app } from 'electron'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, AgentActiveSessionSnapshot, CodexOAuthCredentials, GithubCopilotOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, AgentAssistantDeltaPayload, RewindSessionResult, SkillActivation, RunModelSnapshot } from '@proma/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, AgentActiveSessionSnapshot, CodexOAuthCredentials, GithubCopilotOAuthCredentials, XaiOAuthCredentials, TypedError, SDKMessage, SDKAssistantMessage, AgentStreamPayload, AgentAssistantDeltaPayload, RewindSessionResult, SkillActivation, RunModelSnapshot, EffectiveAgentCapabilities } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
   PROMA_PERMISSION_MODE_CONFIG,
@@ -52,7 +52,7 @@ import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, resolveSessionWorkbenchContextDir, isAgentSessionDeleting } from './agent-session-manager'
-import { getAgentWorkspace, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, getWorkspaceAgentsMdPath, readWorkspaceAgentsMd, getWorkspaceMemoryGuidance, isWorkspaceProjectKnowledgeMaintenanceApproved } from './agent-workspace-manager'
+import { getAgentWorkspace, getProjectFilesPath, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, getWorkspaceAgentsMdPath, readWorkspaceAgentsMd, getWorkspaceMemoryGuidance, isWorkspaceProjectKnowledgeMaintenanceApproved } from './agent-workspace-manager'
 import { getLocalProjectRootStatus } from './project-root-health'
 import { getMcpApiKeyEnvironment, getMcpOAuthHeaders } from './mcp-oauth-service'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
@@ -83,6 +83,7 @@ import { createFallbackTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './tit
 import { claimWorkspaceMemoryRefreshOpportunity } from './agent-memory-refresh-service'
 import { browserController } from './browser-controller'
 import { resolveRuntimeAdditionalDirectories } from './agent-orchestrator-vault-access'
+import { resolveWorkspaceAgentCapabilities } from './agent-capability-runtime'
 
 // ===== 类型定义 =====
 
@@ -256,17 +257,16 @@ export class AgentOrchestrator {
   /**
    * 构建工作区 MCP 服务器配置
    */
-  private async buildMcpServers(workspaceSlug: string | undefined, proxyUrl?: string): Promise<Record<string, Record<string, unknown>>> {
+  private async buildMcpServers(capabilities: EffectiveAgentCapabilities, proxyUrl?: string): Promise<Record<string, Record<string, unknown>>> {
     const mcpServers: Record<string, Record<string, unknown>> = {}
-    if (!workspaceSlug) return mcpServers
-
-    const mcpConfig = getWorkspaceMcpConfig(workspaceSlug)
-    for (const [name, entry] of Object.entries(mcpConfig.servers ?? {})) {
-      if (!entry.enabled) continue
+    for (const resolved of capabilities.mcpServers) {
+      if (!resolved.resolution.enabled || resolved.resolution.status !== 'ready') continue
+      const { name, server: entry } = resolved
+      const credentialScope = resolved.credentialScope
       const type = normalizeMcpTransportType((entry as { type?: unknown }).type)
 
       if (type === 'stdio' && entry.command) {
-        const credentialEnv = getMcpApiKeyEnvironment(workspaceSlug, name, entry)
+        const credentialEnv = credentialScope ? getMcpApiKeyEnvironment(credentialScope, name, entry) : undefined
         const mergedEnv: Record<string, string> = {
           ...(process.env.PATH && { PATH: process.env.PATH }),
           ...entry.env,
@@ -283,7 +283,7 @@ export class AgentOrchestrator {
       } else if ((type === 'http' || type === 'sse') && entry.url) {
         let oauthHeaders: Record<string, string> | undefined
         try {
-          oauthHeaders = await getMcpOAuthHeaders(workspaceSlug, name, entry.url)
+          oauthHeaders = credentialScope ? await getMcpOAuthHeaders(credentialScope, name, entry.url) : undefined
         } catch (error) {
           console.warn(`[Agent 编排] MCP OAuth 凭据不可用：${name}`, error instanceof Error ? error.message : error)
           continue
@@ -1094,7 +1094,14 @@ export class AgentOrchestrator {
 
       // 10. 构建 MCP 服务器配置 + 记忆工具 + 生图工具 + 自定义工具
       const restrictedTools = extensions.analysisTools ?? extensions.actionTools
-      const mcpServers = restrictedTools ? {} : await this.buildMcpServers(workspaceSlug, proxyUrl)
+      const effectiveCapabilities = resolveWorkspaceAgentCapabilities(workspaceSlug)
+      console.log(
+        `[Agent 编排] 有效能力: hash=${effectiveCapabilities.effectiveHash.slice(0, 12)}, ` +
+        `skills=${effectiveCapabilities.skills.filter((item) => item.resolution.enabled).length}, ` +
+        `mcp=${effectiveCapabilities.mcpServers.filter((item) => item.resolution.enabled).length}, ` +
+        `deniedTools=${effectiveCapabilities.toolPolicy.deniedTools.length}`,
+      )
+      const mcpServers = restrictedTools ? {} : await this.buildMcpServers(effectiveCapabilities, proxyUrl)
       let piBuiltinTools: unknown[] = []
       let piMcpTools: unknown[] = []
       const piSdk = await import('@earendil-works/pi-coding-agent')
@@ -1330,6 +1337,9 @@ export class AgentOrchestrator {
 
       // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
+        if (effectiveCapabilities.toolPolicy.deniedTools.includes(toolName)) {
+          return { behavior: 'deny', message: `当前有效 Agent 能力策略禁止工具: ${toolName}` }
+        }
         if (extensions.analysisTools) return extensions.analysisTools.some((t) => t.name === toolName)
           ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: '远程分析任务只允许受限读取工具' }
         if (extensions.actionTools) return extensions.actionTools.some((t) => t.name === toolName)
@@ -1666,7 +1676,12 @@ export class AgentOrchestrator {
         ...(maxTurns != null && { maxTurns }),
         permissionMode: initialPermissionMode,
         canUseTool,
-        systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories),
+        systemPrompt: [
+          systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories),
+          ...effectiveCapabilities.instructions
+            .filter((instruction) => instruction.resolution.enabled && instruction.resolution.status === 'ready')
+            .map((instruction) => instruction.text),
+        ].filter(Boolean).join('\n\n'),
         ...(instructionFiles.length > 0 && { projectInstructionFiles: instructionFiles }),
         ...(projectInstructions && {
           projectInstructionScope: {
@@ -1679,9 +1694,12 @@ export class AgentOrchestrator {
         piAgentDir: getSdkConfigDir(),
         piSessionDir: join(getSdkConfigDir(), 'sessions'),
         ...(allAdditionalDirectories.length > 0 && { additionalDirectories: allAdditionalDirectories }),
-        ...(workspaceSlug ? {
-          additionalSkillPaths: [getWorkspaceSkillsDir(workspaceSlug)],
-          skillWorkspaceSlug: workspaceSlug,
+        ...(effectiveCapabilities.skills.some((skill) => skill.resolution.enabled && skill.resolution.status === 'ready') ? {
+          additionalSkillPaths: [...new Set(effectiveCapabilities.skills
+            .filter((skill) => skill.resolution.enabled && skill.resolution.status === 'ready')
+            .map((skill) => skill.directory)
+            .filter(Boolean))],
+          ...(workspaceSlug ? { skillWorkspaceSlug: workspaceSlug } : {}),
         } : {}),
         ...(mentionedSkills?.length ? { skillMentions: mentionedSkills } : {}),
         onSkillActivated: recordSkillActivation,
