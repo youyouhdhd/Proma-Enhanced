@@ -1,12 +1,19 @@
 # Proma Fork 维护与上游同步指南
 
-记录版本：0.1.12
-最后核对：2026-09-22
+记录版本：0.1.13
+最后核对：2026-09-23
 适用对象：维护 `youyouhdhd/Proma-Enhanced` Fork（官方上游 `proma-ai/Proma`）的开发者
 
 本文的目标是让维护者在 `proma-ai/Proma` 发布新版本后，能够先取得上游更新，再有边界地重放本 Fork 的定制功能。它记录当前仓库的真实分叉状态、定制提交和已知冲突区域；不把上游代码复制成第二份，也不建议直接在 `main` 上试错。
 
 ## 当前仓库状态
+
+### 2026-09-23：v1.16.2 Enhanced 使用指导同步
+
+- 仓库级核对 `upstream/main..main` 的 56 个 Fork 提交与 264 个差异文件，把用户可见增强归纳为 QuickAsk、模型/授权、ChatGPT Connector、多项目共享、Direct/Agent Delegation、远程 Transport、Global Agent Capability、长运行体验和独立发布体系。
+- `proma-coach` 保留原有 A–F 诊断、四步工作流和知识维护结构，只补充 Enhanced 能力的稳定选择规则、诊断入口与安全不变量；完整能力地图放入按需读取的 `references/enhanced-capability-map.md`，避免普通 Coach 触发携带整份产品目录。
+- 默认 Skill 版本从 1.0.13 升至 1.0.14，根工作区/Electron 开发版本升至 1.16.2；shared 0.12.0、session-core 0.2.0 和 Pi 0.86.1 不变。本提交只同步指导能力，不修改运行时权限、Connector URL 或 Global Registry 数据。
+- 验证：733 tests / 0 fail、全 workspace typecheck、frozen lockfile、Electron build、Renderer 边界与产物 smoke 通过；项目版本解析器确认默认 Skill 为 1.0.14。
 
 ### 2026-09-22：v1.16.1 上游同步与统一 Agent 能力层
 
