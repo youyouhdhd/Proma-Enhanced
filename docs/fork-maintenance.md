@@ -1,12 +1,21 @@
 # Proma Fork 维护与上游同步指南
 
-记录版本：0.1.11
-最后核对：2026-09-13
+记录版本：0.1.12
+最后核对：2026-09-22
 适用对象：维护 `youyouhdhd/Proma-Enhanced` Fork（官方上游 `proma-ai/Proma`）的开发者
 
 本文的目标是让维护者在 `proma-ai/Proma` 发布新版本后，能够先取得上游更新，再有边界地重放本 Fork 的定制功能。它记录当前仓库的真实分叉状态、定制提交和已知冲突区域；不把上游代码复制成第二份，也不建议直接在 `main` 上试错。
 
 ## 当前仓库状态
+
+### 2026-09-22：v1.16.1 上游同步与统一 Agent 能力层
+
+- 只合并已经进入 `upstream/main` 的 `4e96c5e859302c4a34618d45db352b29a7ebeb28`，未合并任何上游 PR 分支；Pi runtime 由 0.85.1 升级到 0.86.1。
+- 每轮 Agent 运行持久化 requested/executed/fallback 模型快照；Desktop、历史、会话预览、上下文统计和飞书终态统一展示实际执行模型。
+- 长运行视图复用现有滚动体系，增加暂停阅读期间的“最新 · N”、回底清零、滚动条 ARIA、键盘导航和 Reduced Motion 行为。
+- Global Capability Resolver 统一合并 Required、Default、Project、Session、Turn；工具策略执行 Deny-Wins，缺失引用保留 missing/error，结果生成稳定 `effectiveHash`。
+- 新增全局 Registry、项目 Overlay、显式 Skill/MCP Promote、独立 Keychain scope、Legacy Loader 回滚开关和 Effective Inspector。全局 MCP JSON 不保存 Header/env Secret；移除全局条目会清理 Overlay 引用并恢复原项目能力。
+- 发布版本：根工作区/Electron 1.16.1、shared 0.12.0、session-core 0.2.0、Pi 0.86.1。阶段提交为 `0f25691c`、`f74a611c`、`28d0b585`、`c3131ef9`、`530ac5bb`；完整说明见 [v1.16.1 发布说明](../release-notes/v1.16.1.md) 与 [执行文档](./plans/2026-09-14-global-agent-capabilities-model-attribution-runtime-navigation-design.md)。
 
 ### 2026-09-13：v1.13.2 ChatGPT 能力发现与 Agent 队列安全修复
 

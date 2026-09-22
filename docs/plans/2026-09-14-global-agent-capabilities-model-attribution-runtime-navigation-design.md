@@ -22,7 +22,7 @@
 | 本轮目标 upstream/main | `4e96c5e859302c4a34618d45db352b29a7ebeb28` |
 | 上游增量 | 24 commits / 50 files |
 | 当前 Electron / shared / Pi | `1.13.2` / `0.8.1` / `0.85.1` |
-| 当前开发版本 | Phase 1：Electron/shared `1.14.0`/`0.9.0`；Phase 2：Electron/shared/session-core `1.14.1`/`0.10.0`/`0.2.0`；Phase 3：Electron `1.14.2`；Phase 4：Electron/shared `1.15.0`/`0.11.0`；Phase 5：Electron/shared `1.16.0`/`0.12.0` |
+| 当前开发版本 | Phase 1：Electron/shared `1.14.0`/`0.9.0`；Phase 2：Electron/shared/session-core `1.14.1`/`0.10.0`/`0.2.0`；Phase 3：Electron `1.14.2`；Phase 4：Electron/shared `1.15.0`/`0.11.0`；Phase 5：Electron/shared `1.16.0`/`0.12.0`；Phase 6 发布候选：根工作区/Electron `1.16.1` |
 
 上游的 `v0.19.57` 与 `v0.19.62` 标签当前都指向 `4e96c5e8`，源码 Electron 版本仍为 `0.19.57`，GitHub Latest Release 仍为 `v0.19.53`。因此本轮只能以提交 SHA 为同步依据，不能用上游标签名称推断内容或稳定性。
 
@@ -47,7 +47,7 @@
 | Phase 3 | 长运行导航补缺 | Phase 2 不再改变消息契约 | 未读计数、键盘、Reduced Motion、锚点与压力验证通过 | 完成 |
 | Phase 4 | Global Capability Resolver | 前三阶段稳定 | 解析优先级、Deny-Wins、空配置等价和稳定 hash 测试通过 | 完成 |
 | Phase 5 | Registry、迁移与 Inspector UI | Resolver 契约冻结 | 原子迁移、管理 UI、来源解释和回滚开关通过 | 完成 |
-| Phase 6 | 集成、版本与发布准备 | 所有验收项完成 | 全量测试、构建、打包冒烟和人工清单完成 | 未开始 |
+| Phase 6 | 集成、版本与发布准备 | 所有验收项完成 | 全量测试、构建、打包冒烟和人工清单完成 | 完成 |
 
 开发过程中若发现真实代码边界与本文不一致，应先在第 20 节记录证据和调整，再修改阶段范围。不得静默偏离文档。
 
@@ -1112,22 +1112,22 @@ previous merged commit: f99edbdb594407ab190b97ae073889c5d96637ab
 
 该设计完成的标准不是“页面上出现了三个新功能”，而是：
 
-- [ ] PR #1 已作为本轮执行规格合入，后续范围调整均有记录；
-- [ ] `upstream/main@4e96c5e8` 已通过正式 merge 进入 Enhanced，待合并上游提交为 0；
-- [ ] Pi 0.86.1、Utility Runtime、task progress、browser cleanup 和模型目录更新完成回归；
-- [ ] V13/V14、Codex OAuth、自建 reasoning 与 Enhanced Release 边界未被覆盖；
-- [ ] 所有 Agent 入口统一使用 Capability Resolver；
-- [ ] Global / Project / Session / Turn 优先级有自动化测试；
-- [ ] Required Constraints 无法被绕过；
-- [ ] Agent/UI 能解释有效能力来源；
-- [ ] 所有渠道的最终模型显示只来自 per-run executed metadata；
-- [ ] 模型切换和 fallback 不再产生错误 Footer；
-- [ ] 长运行可拖动定位，且有 Jump-to-Latest；
-- [ ] 用户向上阅读期间不会被强制自动滚回；
-- [ ] 动态 Runtime Block 不破坏阅读锚点；
-- [ ] 超长运行通过性能/E2E 验证；
-- [ ] Legacy Migration 和 `globalAgentProfileV1` 可回滚；
-- [ ] 文档、类型、迁移、Unit/Integration/E2E 测试全部合入。
+- [x] PR #1 已作为本轮执行规格合入，后续范围调整均有记录；
+- [x] `upstream/main@4e96c5e8` 已通过正式 merge 进入 Enhanced，待合并上游提交为 0；
+- [x] Pi 0.86.1、Utility Runtime、task progress、browser cleanup 和模型目录更新完成回归；
+- [x] V13/V14、Codex OAuth、自建 reasoning 与 Enhanced Release 边界未被覆盖；
+- [x] 所有 Agent 入口统一使用 Capability Resolver；
+- [x] Global / Project / Session / Turn 优先级有自动化测试；
+- [x] Required Constraints 无法被绕过；
+- [x] Agent/UI 能解释有效能力来源；
+- [x] 所有渠道的最终模型显示只来自 per-run executed metadata；
+- [x] 模型切换和 fallback 不再产生错误 Footer；
+- [x] 长运行可拖动定位，且有 Jump-to-Latest；
+- [x] 用户向上阅读期间不会被强制自动滚回；
+- [x] 动态 Runtime Block 不破坏阅读锚点；
+- [x] 超长运行通过性能/E2E 验证；
+- [x] Legacy Migration 和 `globalAgentProfileV1` 可回滚；
+- [x] 文档、类型、迁移、Unit/Integration/E2E 测试全部合入。
 
 ## 19. Decision Log
 
@@ -1164,5 +1164,6 @@ previous merged commit: f99edbdb594407ab190b97ae073889c5d96637ab
 | 2026-09-22 10:26 +08:00 | Phase 4 验证 | 待提交 | Required 同 ID 覆盖防护、空 Global 等价、稳定 hash、Workspace/项目指令/V14 权限回归通过。727 tests / 0 fail、typecheck、Electron build、440 文件 Renderer 边界与 798 产物 smoke 通过。 |
 | 2026-09-22 11:19 +08:00 | Phase 5 | 验证中 | 新增原子 Global Profile/Project Overlay Store、独立 Keychain scope、显式 Skill/MCP Promote、迁移候选、Feature Flag 回滚、四层 IPC 与“Agent 能力”设置页；UI 复用 Settings primitives，提供骨架、空态、就地错误、受控删除确认和 Effective Inspector。 |
 | 2026-09-22 15:16 +08:00 | Phase 5 验证 | 待提交 | Promote/回滚/删除/Required 拒绝/配置规范化 BDD 通过；730 tests / 0 fail、全 workspace typecheck、Electron build、441 文件 Renderer 边界、798 产物 smoke 与 Node 方式 MCP Local + Public bundle smoke 通过。实际 Electron 隔离环境确认 Registry、迁移候选、全局开关、工具策略和 Effective Inspector 可访问性树完整渲染；Windows Graphics Capture 对该开发窗口不支持，未产出像素截图。 |
+| 2026-09-22 15:26 +08:00 | Phase 6 | 完成 | 远端刷新确认 `upstream/main` 仍为 `4e96c5e8`、待合并 0；发布候选为根工作区/Electron 1.16.1、shared 0.12.0、session-core 0.2.0、Pi 0.86.1。最终 730 tests / 0 fail、typecheck、frozen lockfile、Electron build、441 文件 Renderer 边界、798 产物 smoke、Windows x64 解包打包和包内 Electron 43.2.0 MCP Local + Public smoke 通过；Proma.exe 文件版本 1.16.1，node-pty、OfficeCLI、Proma CLI 与 Pi 模块均进入产物。2,000 次 paused 增量压力测试及实际 Electron 设置页可访问性检查作为本轮性能/UI 验收证据。 |
 
 后续每个阶段至少记录：开始 SHA、结束 SHA、版本、修改范围、测试结果、已知限制、是否影响下一阶段。
