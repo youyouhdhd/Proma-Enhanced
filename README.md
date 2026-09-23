@@ -1,24 +1,28 @@
-# Proma
+# Proma Enhanced
 
-> **[Fork 说明]** 本仓库是 [proma-ai/Proma](https://github.com/proma-ai/Proma) 的增强 Fork，自 **v1.0.0** 起使用独立版本号（与上游版本号无关，每个版本基于的上游基准记录在 Release 说明与 [Fork 维护指南](./docs/fork-maintenance.md) 中）。相比上游的主要差异：
->
-> - **临时提问浮窗（QuickAsk）**：Chat / Agent 内一键唤起与当前会话完全隔离的短对话，支持独立选模型与推理档位，不污染原会话上下文；
-> - **自建渠道推理档位**：OpenAI 兼容自建渠道可声明推理档位并映射为 `reasoning_effort`，Chat / Agent 工具栏直接切换（上游仅对内置模型提供思考深度）；
-> - **飞书卡片显示渠道名**：同一模型存在多渠道时，卡片底部可分辨实际使用的渠道；
-> - **渲染修复**：未标注语言的代码块不再把路径清单误判为编程语言；
-> - **MCP 共享与远程访问**：一个 Connector 动态管理多个项目，按项目授权 Direct 读写与 Shell，支持独立 ngrok 配置、加密 Credential、已有 Endpoint 安全复用、多模型异步分析，以及 ChatGPT 首次连接能力说明和可选 Agent 动作委派；
-> - **统一 Agent 能力层**：全局 Registry 与项目 Overlay 统一解析 Skills、MCP、Instructions 和工具策略，设置页可查看来源、状态与有效配置；当前稳定版本与升级说明见 [v1.16.1 发布说明](./release-notes/v1.16.1.md)；
-> - **稳定打包方案**：固定 hoisted 安装布局、Electron 二进制自检的一键构建脚本（`scripts/build-win.ps1`）。
->
-> 同步策略：定期合并上游（`bun run sync:upstream`），完整差异清单与冲突处理记录见 [docs/fork-maintenance.md](./docs/fork-maintenance.md)。
+基于 [官方 Proma](https://github.com/proma-ai/Proma) 的增强 Fork，保留其本地优先的桌面 Agent 基础，并独立维护面向多项目、ChatGPT 连接和 Agent 使用体验的扩展。**自 v1.0.0 起，本仓库的版本号、安装包和更新来源均独立于上游。**
 
-[Fork Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases) | [Fork Maintenance](./docs/fork-maintenance.md) | [v1.16.1](./release-notes/v1.16.1.md)
+[下载本 Fork 的最新版本](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.16.2 更新说明](./release-notes/v1.16.2.md) · [English](./README.en.md) · [Fork 维护与上游同步记录](./docs/fork-maintenance.md)
+
+## 这个 Fork 增加了什么
+
+| 关注点 | Enhanced Fork 的扩展 |
+| --- | --- |
+| ChatGPT 与多项目连接 | 一个 MCP Connector 连接多个授权项目；`workspace_list` 告知客户端实时权限。Direct 文件/Git/命令工具与 PROMA Agent 分析、受控动作分别配置，动作可要求本地审批。 |
+| 远程连接 | 提供 Local、Cloudflare、ngrok、Tailscale 和已有 HTTPS 入口；支持稳定地址、独立凭据、Endpoint 安全复用和分层诊断。写入与 Shell 默认关闭。 |
+| Agent 能力管理 | Global Registry 统一管理跨项目 Skills、MCP、Instructions 和工具策略；Project Overlay 记录项目差异，Effective Inspector 展示实际来源与状态。 |
+| 对话与模型 | QuickAsk 处理不污染当前会话的临时问题；自建渠道支持推理档位；每轮记录实际执行模型，历史记录与飞书终态不会被后续模型切换改写。 |
+| 长任务体验 | 暂停阅读时保持位置，显示“最新 · N”；支持滚动位置定位、键盘导航和 Reduced Motion。内置 `proma-coach` 已补充本 Fork 的使用指导。 |
+
+从 [本 Fork 的 Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases) 下载 Windows、macOS Apple Silicon/Intel、Linux 安装包；不要用上游版本号判断本仓库的新旧。v1.16.2 的指导 Skill 更新见 [发布说明](./release-notes/v1.16.2.md)，前一版的 Agent 能力架构与上游同步见 [v1.16.1](./release-notes/v1.16.1.md)。我们只同步已经合入 `upstream/main` 的提交，具体基线和冲突记录见 [Fork 维护指南](./docs/fork-maintenance.md)。
 
 ![image-20260909165815654](https://img.erlich.fun/personal-blog/proma/image-20260909165815654.png)
 
 
 
-## Proma 简介
+## 上游 Proma 简介
+
+以下保留上游项目的通用产品介绍；本 Fork 的扩展与下载入口以页面开头的信息为准。
 
 
 

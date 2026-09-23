@@ -1,6 +1,6 @@
 {
   "name": "proma",
-  "version": "1.16.2",
+  "version": "1.16.3",
   "description": "Proma，为专业用户设计的 Agent",
   "type": "module",
   "private": true,

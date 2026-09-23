@@ -1,21 +1,26 @@
-# Proma
+# Proma Enhanced
 
-> **[Fork notice]** This repository is an enhanced fork of [proma-ai/Proma](https://github.com/proma-ai/Proma) and has used its **own version line since v1.0.0** (independent from upstream versioning; the upstream base of each release is documented in its release notes and the [Fork Maintenance Guide](./docs/fork-maintenance.md)). Key differences from upstream:
->
-> - **QuickAsk floating panel**: an isolated short-conversation popup inside Chat / Agent with its own model and reasoning-level selection, never touching the host session's context;
-> - **Custom-channel reasoning levels**: self-hosted OpenAI-compatible channels can declare reasoning levels mapped to `reasoning_effort`, switchable directly in the Chat / Agent toolbar (upstream only offers thinking depth for built-in models);
-> - **Feishu cards show the channel name**: with the same model on multiple channels, the actual channel is now visible on the card footer;
-> - **Rendering fix**: untagged code blocks no longer misclassify path lists as programming languages;
-> - **Managed ngrok and multi-project MCP**: isolated configuration and credentials, verified Endpoint reuse, dynamic project permissions, Agent queues, ChatGPT capability discovery, and optional Agent action delegation; see the [v1.13.2 release notes](./release-notes/v1.13.2.md);
-> - **Stable packaging**: pinned hoisted install layout plus an Electron binary self-check in the one-command build script (`scripts/build-win.ps1`).
->
-> Sync policy: upstream is merged regularly (`bun run sync:upstream`); the full diff inventory and conflict notes live in [docs/fork-maintenance.md](./docs/fork-maintenance.md).
+An enhanced fork of [official Proma](https://github.com/proma-ai/Proma). It keeps Proma's local-first desktop Agent foundation and independently maintains extensions for multi-project work, ChatGPT connectivity, and Agent usability. **Since v1.0.0, this fork has had its own versions, installers, and update source.**
 
-[Fork Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases) | [Fork Maintenance](./docs/fork-maintenance.md) | [v1.13.2](./release-notes/v1.13.2.md)
+[Download the latest fork release](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.16.2 release notes](./release-notes/v1.16.2.md) · [中文](./README.md) · [Fork maintenance and upstream sync](./docs/fork-maintenance.md)
+
+## What this fork adds
+
+| Area | Enhanced Fork additions |
+| --- | --- |
+| ChatGPT and multiple projects | One MCP Connector exposes multiple authorized projects. `workspace_list` reports live permissions. Direct file/Git/command tools, Agent analysis, and controlled Agent actions are configured separately; actions can require local approval. |
+| Remote connectivity | Local, Cloudflare, ngrok, Tailscale, and existing HTTPS options, with stable URLs, isolated credentials, verified Endpoint reuse, and layered diagnostics. Write and Shell access are off by default. |
+| Agent capabilities | A Global Registry shares Skills, MCP servers, instructions, and tool policy across projects. Project Overlays record exceptions; the Effective Inspector shows the active source and status. |
+| Conversations and models | QuickAsk handles short questions without changing the current conversation. Custom channels can expose reasoning levels. Per-run executed-model records keep history and Feishu results accurate after model changes. |
+| Long-running tasks | Reading position stays put while new results arrive, with a “Latest · N” cue, keyboard navigation, and reduced-motion support. The bundled `proma-coach` Skill now covers fork-specific workflows. |
+
+Download Windows, macOS Apple Silicon/Intel, or Linux builds from [this fork's Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases). The v1.16.2 Coach update is described in its [release notes](./release-notes/v1.16.2.md); the Agent capability work and upstream sync are covered in [v1.16.1](./release-notes/v1.16.1.md). We sync commits already merged into `upstream/main`; see the [Fork Maintenance Guide](./docs/fork-maintenance.md) for the upstream base and conflict history.
 
 ![Proma Poster](https://img.erlich.fun/personal-blog/uPic/pb.png)
 
-## About Proma
+## About upstream Proma
+
+The following general product introduction is inherited from upstream. Use the fork-specific links above for this repository's additions and downloads.
 
 Proma is an open-source, general-purpose desktop Agent product built for professional users. It covers the capabilities expected from leading Agent products, including:
 
