@@ -2,7 +2,7 @@
 
 An enhanced fork of [official Proma](https://github.com/proma-ai/Proma). It keeps Proma's local-first desktop Agent foundation and independently maintains extensions for multi-project work, ChatGPT connectivity, and Agent usability. **Since v1.0.0, this fork has had its own versions, installers, and update source.**
 
-[Download the latest fork release](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.16.2 release notes](./release-notes/v1.16.2.md) · [中文](./README.md) · [Fork maintenance and upstream sync](./docs/fork-maintenance.md)
+[Download the latest fork release](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.16.5 release notes](./release-notes/v1.16.5.md) · [中文](./README.md) · [Fork maintenance and upstream sync](./docs/fork-maintenance.md)
 
 ## What this fork adds
 
@@ -11,10 +11,10 @@ An enhanced fork of [official Proma](https://github.com/proma-ai/Proma). It keep
 | ChatGPT and multiple projects | One MCP Connector exposes multiple authorized projects. `workspace_list` reports live permissions. Direct file/Git/command tools, Agent analysis, and controlled Agent actions are configured separately; actions can require local approval. |
 | Remote connectivity | Local, Cloudflare, ngrok, Tailscale, and existing HTTPS options, with stable URLs, isolated credentials, verified Endpoint reuse, and layered diagnostics. Write and Shell access are off by default. |
 | Agent capabilities | A Global Registry shares Skills, MCP servers, instructions, and tool policy across projects. Project Overlays record exceptions; the Effective Inspector shows the active source and status. |
-| Conversations and models | QuickAsk handles short questions without changing the current conversation. Custom channels can expose reasoning levels. Per-run executed-model records keep history and Feishu results accurate after model changes. |
+| Conversations and models | Codex sign-in accepts a callback URL completed on another device. Its model picker fetches models and reasoning capabilities for the signed-in account. QuickAsk and per-run model records keep conversation history accurate. |
 | Long-running tasks | Reading position stays put while new results arrive, with a “Latest · N” cue, keyboard navigation, and reduced-motion support. The bundled `proma-coach` Skill now covers fork-specific workflows. |
 
-Download Windows, macOS Apple Silicon/Intel, or Linux builds from [this fork's Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases). The v1.16.2 Coach update is described in its [release notes](./release-notes/v1.16.2.md); the Agent capability work and upstream sync are covered in [v1.16.1](./release-notes/v1.16.1.md). We sync commits already merged into `upstream/main`; see the [Fork Maintenance Guide](./docs/fork-maintenance.md) for the upstream base and conflict history.
+Download Windows, macOS Apple Silicon/Intel, or Linux builds from [this fork's Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases). The Codex sign-in and live model discovery updates are described in the [v1.16.5 release notes](./release-notes/v1.16.5.md); the Coach update is in [v1.16.2](./release-notes/v1.16.2.md). We sync commits already merged into `upstream/main`; see the [Fork Maintenance Guide](./docs/fork-maintenance.md) for the upstream base and conflict history.
 
 ![Proma Poster](https://img.erlich.fun/personal-blog/uPic/pb.png)
 

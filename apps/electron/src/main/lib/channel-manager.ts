@@ -48,8 +48,9 @@ import { refreshXaiOAuth } from './xai-oauth-service'
 import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from './xai-oauth-credentials'
 import { parseCodexPlanQuotaResponse } from './codex-plan-quota'
 import { queryGithubCopilotPlanQuota } from './github-copilot-plan-quota'
-import { listCodexModels, listGithubCopilotModels, listXaiModels } from './adapters/pi-model-registry'
-import { getFetchFn } from './proxy-fetch'
+import { listGithubCopilotModels, listXaiModels } from './adapters/pi-model-registry'
+import { codexCatalogChannelModels, fetchCodexModelCatalog } from './codex-model-catalog'
+import { createManagedProxyFetch, getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import {
   getPromaUserAgent,
@@ -1887,6 +1888,34 @@ export async function testChannelDirect(input: ChannelDirectTestInput): Promise<
 
 // ===== 模型拉取相关 =====
 
+async function fetchCodexModels(input: FetchModelsInput, proxyUrl?: string): Promise<FetchModelsResult> {
+  let credentials = parseCodexCredentials(input.apiKey)
+  if (!credentials) return { success: false, message: 'ChatGPT 登录凭据无效，请先登录', models: [] }
+  let oauthCredentials: string | undefined
+  const connection = createManagedProxyFetch(proxyUrl)
+  try {
+    if (isCodexCredentialExpired(credentials)) {
+      const channel = input.channelId ? getChannelById(input.channelId) : undefined
+      const stored = channel?.provider === 'openai-codex' ? parseCodexCredentials(decryptKey(channel.apiKey)) : null
+      const sameAccount = stored && (stored.refresh === credentials.refresh
+        || (credentials.accountId && stored.accountId === credentials.accountId))
+      const refreshed = channel && sameAccount
+        ? await resolveCodexOAuthCredentials(channel.id)
+        : await refreshCodexOAuth(credentials.refresh)
+      credentials = { ...refreshed, accountId: refreshed.accountId ?? credentials.accountId }
+      oauthCredentials = serializeCodexCredentials(credentials)
+    }
+    const models = codexCatalogChannelModels(await fetchCodexModelCatalog(credentials, connection.fetch))
+    return { success: true, message: `已从 ChatGPT 获取 ${models.length} 个当前账号可用模型`, models, oauthCredentials }
+  } catch (error) {
+    const message = error instanceof Error && error.message.startsWith('Codex ')
+      ? error.message : normalizeRequestError(error).message
+    return { success: false, message, models: [], oauthCredentials }
+  } finally {
+    await connection.close()
+  }
+}
+
 /**
  * 从供应商 API 拉取可用模型列表
  *
@@ -1916,13 +1945,7 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
       case 'github-copilot':
       case 'xai':
         if (provider === 'openai-codex') {
-          // ChatGPT (Codex) 走 Pi SDK 内置模型目录，不依赖 baseUrl/apiKey。
-          const codexModels = await listCodexModels()
-          return {
-            success: true,
-            message: `已加载 ${codexModels.length} 个 ChatGPT (Codex) 模型`,
-            models: codexModels.map((m) => ({ id: m.id, name: m.name, enabled: true, source: 'fetched' as const })),
-          }
+          return await fetchCodexModels(input, proxyUrl)
         }
         if (provider === 'github-copilot') {
           const credentials = parseGithubCopilotCredentials(input.apiKey)

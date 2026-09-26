@@ -1,5 +1,31 @@
 import { describe, expect, test } from 'bun:test'
-import { compilePiChannelReasoningCapabilities, resolvePiReasoningCapability } from './pi-model-registry'
+import { buildCodexCatalogModel, compilePiChannelReasoningCapabilities, resolvePiReasoningCapability } from './pi-model-registry'
+import { codexCatalogReasoning, parseCodexModelCatalog } from '../codex-model-catalog'
+
+describe('Codex 远端目录', () => {
+  const entry = parseCodexModelCatalog({ models: [{
+    slug: 'future-model', display_name: '未来模型', visibility: 'list', context_window: 777_777,
+    supported_reasoning_levels: [{ effort: 'medium' }, { effort: 'max' }], default_reasoning_level: 'medium',
+  }] })[0]!
+  test('Given 旧 Pi 不认识的模型 When 注册 Then 采用提供者 ID、窗口和档位', () => {
+    const model = buildCodexCatalogModel(entry)
+    expect(model.id).toBe('future-model')
+    expect(model.api).toBe('openai-codex-responses')
+    expect(model.contextWindow).toBe(777_777)
+    expect(model.thinkingLevelMap?.max).toBe('max')
+    expect(model.thinkingLevelMap?.high).toBeNull()
+    const known = { ...model, cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 }, compat: { supportsToolSearch: true } }
+    const refreshed = buildCodexCatalogModel({ ...entry, context_window: 900_000 }, known)
+    expect(refreshed.cost).toEqual(known.cost)
+    expect(refreshed.compat).toEqual(known.compat)
+    expect(refreshed.contextWindow).toBe(900_000)
+  })
+
+  test('Given 账号能力与静态 profile 不同 When 解析 Codex 档位 Then 提供者能力优先', async () => {
+    expect(await resolvePiReasoningCapability('openai-codex', 'gpt-6-astra', codexCatalogReasoning(entry)))
+      .toEqual({ source: 'channel', levels: ['medium', 'max'], defaultLevel: 'medium' })
+  })
+})
 
 describe('自建模型推理能力', () => {
   const reasoning = {

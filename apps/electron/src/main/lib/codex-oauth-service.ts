@@ -137,10 +137,14 @@ export async function loginCodexOAuth(options?: CodexLoginOptions): Promise<Code
             const onAbort = (): void => manualGate.cancel(new Error('登录已取消'))
             prompt.signal?.addEventListener('abort', onAbort, { once: true })
             abort.signal.addEventListener('abort', onAbort, { once: true })
-            return manualGate.waitForInput(request).finally(() => {
+            const waiting = manualGate.waitForInput(request).finally(() => {
               prompt.signal?.removeEventListener('abort', onAbort)
               abort.signal.removeEventListener('abort', onAbort)
             })
+            // 先建立等待者再通知 UI，确保立即回填也不会丢失授权码。
+            options.onManualCodeRequested(request)
+            if (prompt.signal?.aborted || abort.signal.aborted) onAbort()
+            return waiting
           }
           return new Promise<string>((_resolve, reject) => {
             prompt.signal?.addEventListener('abort', () => reject(new Error('登录已取消')), { once: true })

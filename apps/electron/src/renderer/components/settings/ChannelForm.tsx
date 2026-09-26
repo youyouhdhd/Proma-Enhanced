@@ -817,14 +817,20 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
       // 凭据 JSON 已含 accountId，写入 apiKey 后由 codexCredentials 派生展示，无需单独 state。
       setApiKey(credentials)
 
-      // codex 模型是 Pi SDK 内置目录、不依赖凭据/baseUrl。登录后自动拉取并全部启用。
+      // 使用刚登录的账号查询远端目录；目录失败不撤销已经完成的 OAuth 登录。
       let codexModels: ChannelModel[] = []
       try {
         const modelsResult = await window.electronAPI.fetchModels({ provider, baseUrl, apiKey: credentials })
         setFetchResult(modelsResult)
+        if (modelsResult.oauthCredentials) {
+          credentials = modelsResult.oauthCredentials
+          setApiKey(credentials)
+        }
         if (modelsResult.success && modelsResult.models.length > 0) {
           codexModels = modelsResult.models.map((m) => ({ ...m, enabled: true }))
           setModels(codexModels)
+        } else {
+          toast.warning(`ChatGPT 已登录，但模型拉取失败：${modelsResult.message}`)
         }
       } catch (modelErr) {
         console.error('[模型配置表单] 拉取 ChatGPT 模型失败:', modelErr)
@@ -1004,7 +1010,7 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
 
   /** 从供应商 API 拉取可用模型列表。 */
   const fetchAvailableModels = async (): Promise<void> => {
-    // 订阅 provider 走 Pi SDK 内置目录，不依赖 baseUrl；其余 provider 仍要求 baseUrl。
+    // 订阅 provider 使用各自固定端点，不依赖表单 baseUrl。
     if (!hasRequiredSecret || (!isSubscriptionProvider && !baseUrl.trim())) return
 
     setFetchingModels(true)
@@ -1012,12 +1018,14 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
 
     try {
       const result = await window.electronAPI.fetchModels({
+        channelId: channel?.id,
         provider,
         baseUrl,
         apiKey: effectiveApiKey,
       })
 
       setFetchResult(result)
+      if (result.oauthCredentials) setApiKey(result.oauthCredentials)
 
       // 用成功拉取的结果作为权威清单替换：
       // - source==='manual' 的模型一律保留（即便不在新结果里）
@@ -1032,9 +1040,8 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         const manualKept = prev.filter((m) => m.source === 'manual' && !fetchedById.has(m.id))
         const merged = fetchedModels.map((m) => {
           const old = prev.find((p) => p.id === m.id)
-          // ChatGPT (Codex) 是 SDK 内置的少量精选模型，拉取即全部启用，
-          // 与登录自动拉取路径（handleCodexLogin）保持一致，避免新模型（如 gpt-5.6 系列）
-          // 默认未启用而沉到「可用模型」折叠区，被误认为"拉不到"。
+          // Codex 目录由账号服务实时返回；保留已有开关，新模型直接可选。
+          if (provider === 'openai-codex') return { ...m, enabled: old?.enabled ?? true }
           if (isSubscriptionProvider) return { ...m, enabled: true }
           return old
             ? { ...m, enabled: old.enabled, ...(old.reasoning && { reasoning: old.reasoning }) }

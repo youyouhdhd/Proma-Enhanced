@@ -1,14 +1,19 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
   normalizeReasoningLevel,
+  normalizeReasoningCapabilityLevel,
+  resolveChannelReasoningCapability,
   resolveReasoningProfile,
   type AgentThinkingLevel,
   type ReasoningProfile,
+  type ChannelModelReasoningConfig,
 } from '@proma/shared'
 
 type ProviderPayload = Record<string, unknown>
 
 export interface OpenAIReasoningRequestSettings {
+  /** Codex 账号目录返回的实时能力，优先于静态 profile。 */
+  reasoning?: ChannelModelReasoningConfig
   profile?: ReasoningProfile
   thinkingLevel?: AgentThinkingLevel
 }
@@ -40,11 +45,14 @@ export function injectOpenAIReasoningLevel(
     transport: 'openai-responses',
   })
   const encoding = profile?.encodings['openai-responses']
-  if (encoding?.kind !== 'openai-reasoning-effort' || !settings.thinkingLevel) return payload
-
-  const normalizedLevel = normalizeReasoningLevel(profile, settings.thinkingLevel)
-  if (!normalizedLevel) return payload
-  const effort = encoding.effortMap[normalizedLevel] ?? normalizedLevel
+  if (!settings.thinkingLevel) return payload
+  const capability = resolveChannelReasoningCapability(settings.reasoning)
+  const normalizedLevel = capability
+    ? normalizeReasoningCapabilityLevel(capability, settings.thinkingLevel)
+    : normalizeReasoningLevel(profile, settings.thinkingLevel)
+  if (!normalizedLevel || (!capability && encoding?.kind !== 'openai-reasoning-effort')) return payload
+  const effortMap = capability ? settings.reasoning?.thinkingLevelMap : encoding?.effortMap
+  const effort = effortMap && Object.hasOwn(effortMap, normalizedLevel) ? effortMap[normalizedLevel] : normalizedLevel
   if (effort === null) return payload
 
   const existingReasoning = isReasoningPayload(payload.reasoning) ? payload.reasoning : {}
@@ -53,7 +61,7 @@ export function injectOpenAIReasoningLevel(
   const { mode: _unsupportedReasoningMode, ...reasoningWithoutMode } = existingReasoning
   const reasoning = {
     ...reasoningWithoutMode,
-    ...(effort === 'none' || existingReasoning.effort === undefined ? { effort } : {}),
+    ...(capability || effort === 'none' || existingReasoning.effort === undefined ? { effort } : {}),
   }
   return { ...payload, reasoning }
 }

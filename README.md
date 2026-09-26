@@ -2,7 +2,7 @@
 
 基于 [官方 Proma](https://github.com/proma-ai/Proma) 的增强 Fork，保留其本地优先的桌面 Agent 基础，并独立维护面向多项目、ChatGPT 连接和 Agent 使用体验的扩展。**自 v1.0.0 起，本仓库的版本号、安装包和更新来源均独立于上游。**
 
-[下载本 Fork 的最新版本](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.16.2 更新说明](./release-notes/v1.16.2.md) · [English](./README.en.md) · [Fork 维护与上游同步记录](./docs/fork-maintenance.md)
+[下载本 Fork 的最新版本](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.16.5 更新说明](./release-notes/v1.16.5.md) · [English](./README.en.md) · [Fork 维护与上游同步记录](./docs/fork-maintenance.md)
 
 ## 这个 Fork 增加了什么
 
@@ -11,10 +11,10 @@
 | ChatGPT 与多项目连接 | 一个 MCP Connector 连接多个授权项目；`workspace_list` 告知客户端实时权限。Direct 文件/Git/命令工具与 PROMA Agent 分析、受控动作分别配置，动作可要求本地审批。 |
 | 远程连接 | 提供 Local、Cloudflare、ngrok、Tailscale 和已有 HTTPS 入口；支持稳定地址、独立凭据、Endpoint 安全复用和分层诊断。写入与 Shell 默认关闭。 |
 | Agent 能力管理 | Global Registry 统一管理跨项目 Skills、MCP、Instructions 和工具策略；Project Overlay 记录项目差异，Effective Inspector 展示实际来源与状态。 |
-| 对话与模型 | QuickAsk 处理不污染当前会话的临时问题；自建渠道支持推理档位；每轮记录实际执行模型，历史记录与飞书终态不会被后续模型切换改写。 |
+| 对话与模型 | Codex 登录支持跨设备完成授权后回填回调网址，并按当前账号在线拉取模型和推理能力；QuickAsk、自建渠道推理档位及每轮实际模型记录让历史结果保持准确。 |
 | 长任务体验 | 暂停阅读时保持位置，显示“最新 · N”；支持滚动位置定位、键盘导航和 Reduced Motion。内置 `proma-coach` 已补充本 Fork 的使用指导。 |
 
-从 [本 Fork 的 Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases) 下载 Windows、macOS Apple Silicon/Intel、Linux 安装包；不要用上游版本号判断本仓库的新旧。v1.16.2 的指导 Skill 更新见 [发布说明](./release-notes/v1.16.2.md)，前一版的 Agent 能力架构与上游同步见 [v1.16.1](./release-notes/v1.16.1.md)。我们只同步已经合入 `upstream/main` 的提交，具体基线和冲突记录见 [Fork 维护指南](./docs/fork-maintenance.md)。
+从 [本 Fork 的 Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases) 下载 Windows、macOS Apple Silicon/Intel、Linux 安装包；不要用上游版本号判断本仓库的新旧。v1.16.5 的 Codex 登录与在线模型目录见 [发布说明](./release-notes/v1.16.5.md)，之前的指导 Skill 更新见 [v1.16.2](./release-notes/v1.16.2.md)。我们只同步已经合入 `upstream/main` 的提交，具体基线和冲突记录见 [Fork 维护指南](./docs/fork-maintenance.md)。
 
 ![image-20260909165815654](https://img.erlich.fun/personal-blog/proma/image-20260909165815654.png)
 

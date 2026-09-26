@@ -28,10 +28,15 @@ export function createReasoningCapabilityKey(input: {
 
 /** 三级优先级解析会话推理能力：内置 profile > 频道声明 > IPC 远端目录。 */
 export function resolveConversationReasoningCapability(input: {
+  preferChannel?: boolean
   profile?: ReasoningCapability
   channelReasoning?: ChannelModelReasoningConfig
   remote?: ReasoningCapability
 }): ReasoningCapability | undefined {
+  if (input.preferChannel) {
+    const capability = resolveChannelReasoningCapability(input.channelReasoning)
+    if (capability) return capability
+  }
   return input.profile
     ?? resolveChannelReasoningCapability(input.channelReasoning)
     ?? input.remote

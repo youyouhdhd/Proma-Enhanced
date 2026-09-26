@@ -464,6 +464,8 @@ export interface ChannelTestResult {
  * 拉取模型的输入参数（无需已保存的渠道，直接传入凭证）
  */
 export interface FetchModelsInput {
+  /** 编辑已有渠道时用于复用并持久化 OAuth token 刷新。 */
+  channelId?: string
   provider: ProviderType
   baseUrl: string
   /** 明文 API Key */
@@ -486,6 +488,8 @@ export interface ChannelDirectTestInput {
  * 拉取模型的结果
  */
 export interface FetchModelsResult {
+  /** OAuth 刷新后的凭据；即使目录请求失败，表单也必须接收以免覆盖轮换后的 token。 */
+  oauthCredentials?: string
   /** 是否成功 */
   success: boolean
   /** 结果消息 */

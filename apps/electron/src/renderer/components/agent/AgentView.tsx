@@ -872,6 +872,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
 
   const profileReasoningCapability = resolveReasoningCapability({ profile: reasoningProfile })
   const effectiveReasoningCapability = resolveConversationReasoningCapability({
+    preferChannel: agentChannelProvider === 'openai-codex',
     profile: profileReasoningCapability,
     channelReasoning: modelReasoningConfig,
     remote: piReasoningCapability.key === reasoningCapabilityKey

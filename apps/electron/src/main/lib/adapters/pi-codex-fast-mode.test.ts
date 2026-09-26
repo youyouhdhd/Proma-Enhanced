@@ -7,6 +7,19 @@ import { injectOpenAIReasoningLevel } from './pi-openai-reasoning-request-settin
 import { resolveReasoningProfile } from '@proma/shared'
 
 describe('Pi Codex request settings', () => {
+  test('Given 未知新模型及服务端档位 When 选择 off Then 请求明确发送 none', () => {
+    expect(injectOpenAIReasoningLevel({ model: 'future-model', reasoning: { effort: 'high', summary: 'auto' } }, {
+      thinkingLevel: 'off',
+      reasoning: { levels: ['off', 'medium'], defaultLevel: 'medium', thinkingLevelMap: { off: 'none', medium: 'medium' } },
+    })).toEqual({ model: 'future-model', reasoning: { effort: 'none', summary: 'auto' } })
+  })
+
+  test('Given 服务端不支持旧档位 When 注入 Then 使用目录默认档位而非静态 profile', () => {
+    expect(injectOpenAIReasoningLevel({ model: 'gpt-6-astra', reasoning: { effort: 'high' } }, {
+      thinkingLevel: 'high',
+      reasoning: { levels: ['medium'], defaultLevel: 'medium', thinkingLevelMap: { medium: 'medium' } },
+    })).toEqual({ model: 'gpt-6-astra', reasoning: { effort: 'medium' } })
+  })
   test('Given OpenAI model IDs When resolving profiles Then separates standard, max, and non-reasoning models', () => {
     expect(resolveReasoningProfile({ modelId: 'gpt-5.5', transport: 'openai-responses' })?.id).toBe('openai-reasoning-standard')
     expect(resolveReasoningProfile({ modelId: 'gpt-5.6-terra', transport: 'openai-responses' })?.id).toBe('openai-reasoning-max')

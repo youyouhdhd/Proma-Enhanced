@@ -96,11 +96,10 @@ type BashToolOptions = import('@earendil-works/pi-coding-agent').BashToolOptions
 type PowerShellToolOptions = import('@earendil-works/pi-coding-agent').PowerShellToolOptions
 type SkillLoadResult = ReturnType<ResourceLoader['getSkills']>
 
-// Pi 0.86 将单次 agent retry 退避限制为 maxAgentDelayMs（默认 60 秒）。
-// Proma 保持约十分钟的重试预算：1 + 2 + 4 + 8 + 16 + 32 + (8 × 60) = 543 秒。
+// API 请求 retry 上限配置在 provider 子项；Agent loop retry 使用独立的指数退避设置。
 const PI_NATIVE_MAX_RETRIES = 14
 const PI_NATIVE_RETRY_BASE_DELAY_MS = 1_000
-const PI_NATIVE_MAX_DELAY_MS = 60_000
+const PI_NATIVE_MAX_PROVIDER_DELAY_MS = 60_000
 const MAX_AUTOMATIC_COMPACTION_CONTINUATIONS = 20
 
 export function shouldMarkCompactionAfterCompletedTurn(
@@ -179,6 +178,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   codexFastMode?: boolean
   /** Pi 的 OAuth credential store 使用真实 expires 和 refresh，不读取 ~/.pi。 */
   codexOAuthCredentials?: CodexOAuthCredentials
+  /** 主进程显式传入配置目录，避免 utility process 误判开发/正式配置路径。 */
+  codexCatalogDirectory?: string
   /** Pi 运行中刷新 OAuth 后，将新凭据回写到 Proma 渠道存储。 */
   onCodexOAuthCredentialsRefreshed?: (credentials: CodexOAuthCredentials) => void | Promise<void>
   /** GitHub Copilot OAuth credential store 使用真实 expires、模型策略和 refresh，不读取 ~/.pi。 */
@@ -1474,7 +1475,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           enabled: true,
           maxRetries: PI_NATIVE_MAX_RETRIES,
           baseDelayMs: PI_NATIVE_RETRY_BASE_DELAY_MS,
-          maxAgentDelayMs: PI_NATIVE_MAX_DELAY_MS,
+          provider: { maxRetryDelayMs: PI_NATIVE_MAX_PROVIDER_DELAY_MS },
         },
         // Cache warming 会额外发送 provider 请求；在提供显式开关前不应静默增加消耗。
         cacheWarming: 'off',
@@ -1501,9 +1502,10 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         : undefined
       const extensionFactories = [
         ...(projectInstructionScope ? [projectInstructionScope.createExtension()] : []),
-        ...(openAIReasoningProfile
+        ...(openAIReasoningProfile || (input.provider === 'openai-codex' && input.modelReasoning)
           ? [createOpenAIReasoningRequestExtension({
               profile: openAIReasoningProfile,
+              reasoning: input.provider === 'openai-codex' ? input.modelReasoning : undefined,
               thinkingLevel: input.openAIThinkingLevel,
             })]
           : []),

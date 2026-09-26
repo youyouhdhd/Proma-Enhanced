@@ -35,6 +35,7 @@ import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
 import type { PiAgentQueryOptions } from './pi-agent-adapter'
 import { rememberXaiOAuthCredentials, refreshXaiOAuthCredentialsSerial } from '../xai-oauth-credentials'
 import { supportsPiDeveloperRole } from './pi-provider-compat'
+import { codexCatalogReasoning, readCodexModelCatalog, type CodexCatalogModel } from '../codex-model-catalog'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type PiAiCompat = typeof import('@earendil-works/pi-ai/compat')
@@ -195,6 +196,7 @@ type CodexRuntimeCredential = CodexOAuthCredentials & {
 export interface CodexModelInput {
   model?: string
   codexOAuthCredentials?: CodexOAuthCredentials
+  codexCatalogDirectory?: string
   onCodexOAuthCredentialsRefreshed?: (credentials: CodexOAuthCredentials) => void | Promise<void>
 }
 
@@ -704,6 +706,11 @@ export async function resolvePiReasoningCapability(
   modelId: string | undefined,
   channelReasoning?: ChannelModelReasoningConfig,
 ): Promise<ReasoningCapability | undefined> {
+  // Codex 服务端目录是账号级能力，比内置 profile 更新。
+  if (provider === 'openai-codex') {
+    const capability = resolveChannelReasoningCapability(channelReasoning)
+    if (capability) return capability
+  }
   const resolvedModelId = stripLegacyAgentSdkContextSuffix(modelId)
   const catalogModel = resolvedModelId
     ? await findPiCatalogModel(provider, resolvedModelId)
@@ -882,11 +889,33 @@ export async function getCodexCatalogModels(): Promise<PiCatalogModel[]> {
   return mergeCodexModels(getModels('openai-codex')).filter(isSupportedCodexModel)
 }
 
+/** 把服务端元数据转换为 Pi 模型；协议与地址由 Proma 固定，绝不采用目录中的任意地址。 */
+export function buildCodexCatalogModel(entry: CodexCatalogModel, existing?: PiCatalogModel): PiCatalogModel {
+  const reasoning = codexCatalogReasoning(entry)
+  return {
+    ...existing,
+    id: entry.slug,
+    name: entry.display_name,
+    provider: 'openai-codex',
+    api: 'openai-codex-responses',
+    baseUrl: CODEX_BASE_URL,
+    reasoning: entry.supported_reasoning_levels.length > 0,
+    thinkingLevelMap: {
+      off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null,
+      ...reasoning.thinkingLevelMap,
+    },
+    input: entry.input_modalities,
+    cost: existing?.cost ?? ZERO_MODEL_COST,
+    contextWindow: entry.context_window,
+    maxTokens: Math.min(existing?.maxTokens ?? CODEX_MAX_TOKENS, entry.context_window),
+  }
+}
+
 /**
  * 为 ChatGPT (Codex) OAuth 渠道构建模型。
  *
- * openai-codex 是 Pi SDK 的内置 KnownProvider：模型目录、baseUrl 和
- * `openai-codex-responses` 协议全部内置，无需（也不能）手工构造 models 或 baseUrl。
+ * OAuth 及 Responses 协议复用 Pi 内置 provider，模型元数据优先使用当前账号的远端目录缓存。
+ * 旧目录仅兼容尚未在线拉取的已有会话，不用于冒充在线查询结果。
  * Pi 0.80.10 将它声明为 OAuth-only provider；runtime API key 不会参与其认证解析。
  * 因此将 Proma 已刷新过的完整凭据放入一次性内存 OAuth credential store，
  * 按真实 expires 刷新并回写 Proma，避免读写全局 ~/.pi 认证文件。
@@ -907,23 +936,22 @@ export async function buildCodexModel(sdk: PiSdk, input: CodexModelInput) {
   const resolvedModelId = stripLegacyAgentSdkContextSuffix(input.model)
   const runtimeModels = modelRuntime.getModels('openai-codex').filter(isSupportedCodexModel)
   const codexModels = await getCodexCatalogModels()
+  const remoteModels = readCodexModelCatalog(input.codexOAuthCredentials, input.codexCatalogDirectory).map((entry) =>
+    buildCodexCatalogModel(entry, findCatalogModelById(runtimeModels, entry.slug) ?? findCatalogModelById(codexModels, entry.slug)),
+  )
   const model = resolvedModelId
-    ? runtimeModels.find((candidate) => candidate.id === resolvedModelId)
+    ? findCatalogModelById(remoteModels, resolvedModelId)
+      ?? runtimeModels.find((candidate) => candidate.id === resolvedModelId)
       ?? findCatalogModelById(codexModels, resolvedModelId)
-    : runtimeModels[0]
+    : remoteModels[0] ?? runtimeModels[0]
 
   if (!model) {
     if (resolvedModelId) {
-      throw new Error(`未找到指定的 ChatGPT (Codex) 模型: ${resolvedModelId}`)
+      throw new Error(`未找到指定的 ChatGPT (Codex) 模型: ${resolvedModelId}，请先在渠道设置中拉取模型`)
     }
     throw new Error('未找到可用的 ChatGPT (Codex) 模型，请确认已登录并升级 Pi 运行时')
   }
   return { modelRuntime, model }
-}
-
-/** 列出 Pi SDK 内置的 ChatGPT (Codex) 模型 ID，供渲染层"模型拉取"使用。 */
-export async function listCodexModels(): Promise<{ id: string; name: string }[]> {
-  return (await getCodexCatalogModels()).map((m) => ({ id: m.id, name: m.name }))
 }
 
 export async function getXaiCatalogModels(): Promise<PiCatalogModel[]> {

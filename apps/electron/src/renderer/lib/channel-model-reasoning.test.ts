@@ -10,6 +10,13 @@ import {
 } from './channel-model-reasoning'
 
 describe('频道模型自定义推理档位', () => {
+  test('Given Codex 账号目录 When 与静态 profile 冲突 Then UI 使用账号档位和默认值', () => {
+    expect(resolveConversationReasoningCapability({
+      preferChannel: true,
+      profile: { source: 'profile', levels: ['low', 'high'], defaultLevel: 'high' },
+      channelReasoning: { levels: ['medium', 'max'], defaultLevel: 'medium' },
+    })).toEqual({ source: 'channel', levels: ['medium', 'max'], defaultLevel: 'medium' })
+  })
   test('开启配置时不预置任何推理档位', () => {
     expect(createChannelReasoningConfig()).toEqual({
       levels: [],
