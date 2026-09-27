@@ -21,6 +21,7 @@ interface ProcessBlockGroupProps {
 
 const MAX_PROCESS_GROUP_ICONS = 4
 const PROCESS_GROUP_VIEWPORT_HEIGHT = 320
+const PROCESS_GROUP_HISTORY_VIEWPORT_MAX_HEIGHT = 480
 const PROCESS_GROUP_LIVE_CHILD_WINDOW = 4
 const PROCESS_GROUP_COLLAPSE_DURATION_MS = 500
 const PROCESS_GROUP_AUTO_COLLAPSE_SOUND_DELAY_MS = 900
@@ -161,6 +162,26 @@ export function isProgressViewportAtBottom({
   return scrollHeight - scrollTop - clientHeight <= PROCESS_GROUP_FOLLOW_BOTTOM_THRESHOLD
 }
 
+export type ProgressScrollIntent = 'programmatic' | 'follow' | 'user-scroll'
+
+/**
+ * 区分程序化跟随滚动与用户滚动（滚轮/拖动滑条等）。
+ * Chromium 中拖动滚动条不派发 pointerdown，因此必须从 scroll 事件本身判别：
+ * scrollTop 与最近一次程序赋值一致（±1px）视为跟随动画帧；否则距底部在阈值内
+ * 视为用户主动滚回底部并恢复跟随，其余一律视为用户滚动并停止跟随。
+ */
+export function resolveProgressScrollIntent(input: {
+  scrollTop: number
+  lastProgrammaticTop: number | null
+  isAtBottom: boolean
+}): ProgressScrollIntent {
+  if (input.lastProgrammaticTop !== null
+    && Math.abs(input.scrollTop - input.lastProgrammaticTop) <= 1) {
+    return 'programmatic'
+  }
+  return input.isAtBottom ? 'follow' : 'user-scroll'
+}
+
 function getProcessChildKey(child: React.ReactNode, index: number): string {
   if (React.isValidElement(child) && child.key != null) return String(child.key)
   return `process-child-${index}`
@@ -203,6 +224,7 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
   const userToggledRef = React.useRef(false)
   const followLatestRef = React.useRef(true)
   const smoothScrollTargetRef = React.useRef<number | null>(null)
+  const lastProgrammaticTopRef = React.useRef<number | null>(null)
   const scrollFrameRef = React.useRef<number | null>(null)
   const wasStreamingRef = React.useRef(!!isStreaming)
   const autoCollapseTimersRef = React.useRef<number[]>([])
@@ -217,6 +239,12 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
 
   const isContentExpanded = displayMode === 'expanded'
   const shouldShowContent = isContentExpanded || shouldRenderContent
+  // 视口常开：流式期间跟随最新输出；历史态展开后同样提供独立滚动，
+  // 与外层会话滚动条（Conversation + ScrollMinimap）互不干扰。
+  const isViewportActive = isContentExpanded || keepProgressViewport
+  const viewportMaxHeight = isStreaming
+    ? `${PROCESS_GROUP_VIEWPORT_HEIGHT}px`
+    : `min(50vh, ${PROCESS_GROUP_HISTORY_VIEWPORT_MAX_HEIGHT}px)`
   const visibleChildren = shouldShowContent ? renderChildren() : null
 
   const clearAutoCollapseTimers = React.useCallback(() => {
@@ -246,6 +274,15 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
 
     const shouldAutoCollapseAfterCompletion = wasStreamingRef.current && !userToggledRef.current
     wasStreamingRef.current = false
+
+    // 用户正翻在半路（拖动滑条或滚离底部）时不要在眼前收走内容：
+    // 视为一次显式交互，跳过自动折叠，保留阅读位置。
+    if (shouldAutoCollapseAfterCompletion && !followLatestRef.current) {
+      userToggledRef.current = true
+      setKeepProgressViewport(false)
+      setDisplayMode('expanded')
+      return
+    }
 
     if (!shouldAutoCollapseAfterCompletion) {
       setKeepProgressViewport(false)
@@ -281,6 +318,10 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
     if (!viewport) return
 
     smoothScrollTargetRef.current = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+    if (smoothScrollTargetRef.current <= 0) {
+      lastProgrammaticTopRef.current = null
+      return
+    }
     if (scrollFrameRef.current !== null) return
 
     const advanceScroll = (): void => {
@@ -294,6 +335,7 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
       const distance = target - activeViewport.scrollTop
       if (Math.abs(distance) <= 1) {
         activeViewport.scrollTop = target
+        lastProgrammaticTopRef.current = target
         smoothScrollTargetRef.current = null
         scrollFrameRef.current = null
         return
@@ -304,6 +346,7 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
         ? target - 48
         : activeViewport.scrollTop + distance * 0.32
       activeViewport.scrollTop = nextTop
+      lastProgrammaticTopRef.current = nextTop
       scrollFrameRef.current = requestAnimationFrame(advanceScroll)
     }
 
@@ -332,12 +375,6 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
     if (isStreaming && keepProgressViewport) scrollToLatest()
   }, [stableProcessBlocks, isStreaming, keepProgressViewport, scrollToLatest])
 
-  const handleProgressScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>): void => {
-    if (!isProgressViewportAtBottom(event.currentTarget)) return
-    followLatestRef.current = true
-    scrollToLatest()
-  }, [scrollToLatest])
-
   const handleProgressScrollIntent = React.useCallback((): void => {
     smoothScrollTargetRef.current = null
     followLatestRef.current = false
@@ -346,6 +383,22 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
       scrollFrameRef.current = null
     }
   }, [])
+
+  const handleProgressScroll = React.useCallback((event: React.UIEvent<HTMLDivElement>): void => {
+    const viewport = event.currentTarget
+    const intent = resolveProgressScrollIntent({
+      scrollTop: viewport.scrollTop,
+      lastProgrammaticTop: lastProgrammaticTopRef.current,
+      isAtBottom: isProgressViewportAtBottom(viewport),
+    })
+    if (intent === 'programmatic') return
+    if (intent === 'follow') {
+      followLatestRef.current = true
+      scrollToLatest()
+      return
+    }
+    handleProgressScrollIntent()
+  }, [scrollToLatest, handleProgressScrollIntent])
 
   const handleProgressKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>): void => {
     if (PROGRESS_SCROLL_KEYS.has(event.key)) handleProgressScrollIntent()
@@ -481,16 +534,19 @@ export function ProcessBlockGroup({ blocks, isStreaming, renderChildren, isMessa
           data-agent-history-selection-excluded={isContentExpanded ? undefined : 'true'}
           className={cn(
             'overflow-hidden focus:outline-none',
-            keepProgressViewport && 'overflow-y-auto overscroll-contain scrollbar-none',
+            isViewportActive && 'overflow-y-auto overscroll-contain scrollbar-thin',
           )}
-          tabIndex={keepProgressViewport ? 0 : undefined}
-          onScroll={keepProgressViewport ? handleProgressScroll : undefined}
-          onPointerDown={keepProgressViewport ? handleProgressScrollIntent : undefined}
-          onWheel={keepProgressViewport ? handleProgressScrollIntent : undefined}
-          onTouchStart={keepProgressViewport ? handleProgressScrollIntent : undefined}
-          onKeyDown={keepProgressViewport ? handleProgressKeyDown : undefined}
+          role={isViewportActive ? 'region' : undefined}
+          aria-label={isViewportActive ? '执行过程' : undefined}
+          tabIndex={isViewportActive ? 0 : undefined}
+          onScroll={isViewportActive ? handleProgressScroll : undefined}
+          onPointerDown={isViewportActive ? handleProgressScrollIntent : undefined}
+          onWheel={isViewportActive ? handleProgressScrollIntent : undefined}
+          onTouchStart={isViewportActive ? handleProgressScrollIntent : undefined}
+          onKeyDown={isViewportActive ? handleProgressKeyDown : undefined}
           style={{
-            maxHeight: keepProgressViewport ? `${PROCESS_GROUP_VIEWPORT_HEIGHT}px` : undefined,
+            maxHeight: isViewportActive ? viewportMaxHeight : undefined,
+            scrollbarGutter: isViewportActive ? 'stable' : undefined,
             height: measuredHeight !== undefined ? `${measuredHeight}px` : 'auto',
             opacity: isContentExpanded ? 1 : 0,
             transition: measuredHeight !== undefined
