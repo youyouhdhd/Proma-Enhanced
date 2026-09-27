@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
 import { serializeCodexCredentials } from '@proma/shared'
+import { getAdapter } from '@proma/core'
+import { writeJsonFileAtomic } from './safe-file'
 
 type ChannelManagerModule = typeof import('./channel-manager')
 
@@ -31,13 +33,12 @@ mock.module('node:os', () => ({
   homedir: () => tempHome,
 }))
 
-function writeChannels(channels: unknown[]): void {
+function writeChannels(channels: unknown[], version = 2): void {
   const configDir = join(tempHome, '.proma')
   mkdirSync(configDir, { recursive: true })
-  writeFileSync(
+  writeJsonFileAtomic(
     join(configDir, 'channels.json'),
-    JSON.stringify({ version: 2, channels }),
-    'utf-8',
+    { version, channels },
   )
 }
 
@@ -67,6 +68,34 @@ afterAll(() => {
 })
 
 describe('渠道运行时认证解析', () => {
+  test.each([5, 9])('Given schema %s 的旧套餐配置 When 读取 Then 渠道、密钥及适配器仍可用', async (version) => {
+    const providers = ['opencode-go-openai', 'doubao', 'ark-coding-plan'] as const
+    writeChannels(providers.map((provider) => ({
+      id: provider, name: provider, provider, baseUrl: 'https://example.test', apiKey: 'retained-secret',
+      models: [{ id: 'private-model', name: '自定义模型', enabled: false }], enabled: true, createdAt: 1, updatedAt: 1,
+    })), version)
+    for (const provider of providers) {
+      expect(getAdapter(provider)).toBeDefined()
+      expect(channelManager.getChannelById(provider)?.models).toContainEqual({ id: 'private-model', name: '自定义模型', enabled: false })
+      await expect(channelManager.resolveChannelRuntimeApiKey(provider)).resolves.toBe('retained-secret')
+    }
+  })
+
+  test('Given 小米存量模型 When 补齐 MiMo 2.6 Then 保留旧模型、名称和关闭状态且不重复添加', () => {
+    writeChannels([{
+      id: 'xiaomi', name: '小米', provider: 'xiaomi', baseUrl: 'https://example.test', apiKey: 'test-key',
+      models: [
+        { id: 'mimo-v2.5-pro', name: '旧模型', enabled: true },
+        { id: 'mimo-v2.6-pro', name: '自定名称', enabled: false },
+      ], enabled: true, createdAt: 1, updatedAt: 1,
+    }], 5)
+    const models = channelManager.getChannelById('xiaomi')?.models
+    expect(models).toContainEqual({ id: 'mimo-v2.5-pro', name: '旧模型', enabled: true })
+    expect(models).toContainEqual({ id: 'mimo-v2.6-pro', name: '自定名称', enabled: false })
+    expect(models?.filter((model) => model.id === 'mimo-v2.6-pro')).toHaveLength(1)
+    expect(models).toContainEqual({ id: 'mimo-v2.6-pro-ultraspeed', name: 'MiMo V2.6 Pro UltraSpeed', enabled: false })
+    expect(channelManager.getChannelById('xiaomi')?.models).toEqual(models)
+  })
   test('Given ChatGPT OAuth 渠道 When 解析运行时 key Then 返回 access token 而不是凭据 JSON', async () => {
     writeChannels([
       {

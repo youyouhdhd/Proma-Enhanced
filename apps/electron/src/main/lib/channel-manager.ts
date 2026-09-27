@@ -82,11 +82,9 @@ const KIMI_PRESET_MODELS: ChannelModel[] = [
   { id: 'kimi-k2.6', name: 'Kimi K2.6', enabled: true },
 ]
 const XIAOMI_PRESET_MODELS: ChannelModel[] = [
-  { id: 'mimo-v2.5-pro', name: 'MiMo V2.5 Pro', enabled: true },
-  { id: 'mimo-v2-pro', name: 'MiMo V2 Pro', enabled: true },
-  { id: 'mimo-v2.5', name: 'MiMo V2.5', enabled: true },
-  { id: 'mimo-v2-omni', name: 'MiMo V2 Omni', enabled: true },
-  { id: 'mimo-v2-flash', name: 'MiMo V2 Flash', enabled: true },
+  { id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro', enabled: true },
+  { id: 'mimo-v2.6-flash', name: 'MiMo V2.6 Flash', enabled: true },
+  { id: 'mimo-v2.6-pro-ultraspeed', name: 'MiMo V2.6 Pro UltraSpeed', enabled: false },
 ]
 const QWEN_TOKEN_PLAN_PRESET_MODELS: ChannelModel[] = [
   { id: 'qwen3.8-max-preview', name: 'Qwen3.8 Max Preview', enabled: true },
@@ -173,6 +171,14 @@ const PRESET_MODEL_CANDIDATE_UPDATES: readonly {
       'zhipu-coding-team': [
         { id: 'glm-5.3-flashx', name: 'GLM-5.3-FlashX', enabled: false },
       ],
+    },
+  },
+  {
+    // 只补齐候选，不移除存量模型，也不修改用户现有名称与开关。
+    id: 'xiaomi-mimo-v2-6-v1',
+    candidates: {
+      xiaomi: XIAOMI_PRESET_MODELS,
+      'xiaomi-token-plan': XIAOMI_PRESET_MODELS,
     },
   },
   {

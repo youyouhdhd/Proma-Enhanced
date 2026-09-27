@@ -26,7 +26,13 @@ export {
   inferCodexAlignedGPT5ContextWindow,
   supports1MContext,
   inferContextWindow,
+  isMimoV26Model,
 } from './context-window'
+export {
+  isGpt6AstraFamily,
+  isGpt6SolFamily,
+  isGpt6LunaFamily,
+} from './model-family'
 export { calculateContextUsageRatio } from './context-usage'
 export {
   getGeminiModelCapability,

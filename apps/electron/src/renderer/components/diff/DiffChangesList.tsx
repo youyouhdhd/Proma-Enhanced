@@ -5,7 +5,7 @@
  */
 
 import * as React from 'react'
-import { Box, ChevronRight, FolderSearch, Search, SquareTerminal, Undo2, X } from 'lucide-react'
+import { Box, ChevronDown, ChevronRight, FolderSearch, Search, SquareTerminal, Undo2, X } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -274,6 +274,14 @@ export const DiffChangesList = React.memo(function DiffChangesList({
   const shouldShowSearch = isGitRepo && (hasAnyChanges || searchQuery.length > 0)
   const shouldShowWorktreeSelector = isGitRepo && Boolean(workspaceSlug || (worktreeRepoPaths?.length ?? 0) > 0)
 
+  /** 在系统文件管理器中显示目录。 */
+  const handleShowDirectoryInFolder = React.useCallback((directoryPath: string) => {
+    void window.electronAPI.showInFolder(directoryPath, { sessionId, unrestricted: true }).catch((error) => {
+      console.error('[DiffChangesList] 在文件夹中显示目录失败:', error)
+      toast.error('无法在文件夹中显示该目录')
+    })
+  }, [sessionId])
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -369,7 +377,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
                           type="button"
                           aria-label={`在 ${group.dirName} 打开终端`}
                           title={`在 ${group.dirName} 打开终端`}
-                          className="inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-[background-color,color,opacity,transform] hover:bg-accent/70 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 active:scale-[0.96]"
+                          className="inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color,transform] hover:bg-accent/70 hover:text-foreground active:scale-[0.96]"
                           onClick={() => onOpenDirectoryTerminal(group.gitRoot, group.dirName)}
                         >
                           <SquareTerminal className="size-3.5" />
@@ -378,6 +386,20 @@ export const DiffChangesList = React.memo(function DiffChangesList({
                       <TooltipContent side="left">在右侧标签中打开终端</TooltipContent>
                     </Tooltip>
                   )}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label={`在文件夹中显示 ${group.dirName}`}
+                        title={`在文件夹中显示 ${group.dirName}`}
+                        className="inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color,transform] hover:bg-accent/70 hover:text-foreground active:scale-[0.96]"
+                        onClick={() => handleShowDirectoryInFolder(group.gitRoot)}
+                      >
+                        <FolderSearch className="size-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">在文件夹中显示</TooltipContent>
+                  </Tooltip>
                 </div>
                 {group.tree.map((node) => (
                   <GitFileTreeNode
@@ -397,6 +419,7 @@ export const DiffChangesList = React.memo(function DiffChangesList({
                     }}
                     onRevert={(file) => handleRevert(file.filePath, file.gitRoot)}
                     onOpenDirectoryTerminal={onOpenDirectoryTerminal}
+                    onShowDirectoryInFolder={handleShowDirectoryInFolder}
                   />
                 ))}
               </div>
@@ -422,6 +445,7 @@ function GitFileTreeNode({
   onFileClick,
   onRevert,
   onOpenDirectoryTerminal,
+  onShowDirectoryInFolder,
 }: {
   node: DiffFileTreeNode<GitFileEntry>
   depth: number
@@ -435,6 +459,7 @@ function GitFileTreeNode({
   onFileClick: (file: GitFileEntry, absPath: string) => void
   onRevert: (file: GitFileEntry) => void
   onOpenDirectoryTerminal?: (directoryPath: string, directoryName: string) => void
+  onShowDirectoryInFolder: (directoryPath: string) => void
 }): React.ReactElement {
   if (node.kind === 'file') {
     const file = node.entry
@@ -481,7 +506,7 @@ function GitFileTreeNode({
               type="button"
               aria-label={`在 ${node.name} 打开终端`}
               title={`在 ${node.name} 打开终端`}
-              className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-[background-color,color,opacity,transform] hover:bg-accent/70 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 active:scale-[0.96]"
+              className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color,transform] hover:bg-accent/70 hover:text-foreground active:scale-[0.96]"
               onClick={() => onOpenDirectoryTerminal(directoryPath, node.name)}
             >
               <SquareTerminal className="size-3.5" />
@@ -490,6 +515,20 @@ function GitFileTreeNode({
           <TooltipContent side="left">在右侧标签中打开终端</TooltipContent>
         </Tooltip>
       )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={`在文件夹中显示 ${node.name}`}
+            title={`在文件夹中显示 ${node.name}`}
+            className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color,transform] hover:bg-accent/70 hover:text-foreground active:scale-[0.96]"
+            onClick={() => onShowDirectoryInFolder(directoryPath)}
+          >
+            <FolderSearch className="size-3.5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="left">在文件夹中显示</TooltipContent>
+      </Tooltip>
       </div>
       {!isCollapsed && (
         <div className="relative">
@@ -513,6 +552,7 @@ function GitFileTreeNode({
               onFileClick={onFileClick}
               onRevert={onRevert}
               onOpenDirectoryTerminal={onOpenDirectoryTerminal}
+              onShowDirectoryInFolder={onShowDirectoryInFolder}
             />
           ))}
         </div>
@@ -580,21 +620,37 @@ function NonGitChangesList({
   const title = hasEarlierChanges
     ? `本会话文件变更 · ${changes.length}`
     : `本会话文件变更 · 本轮 · ${current.length}`
+  const [isExpanded, setIsExpanded] = React.useState(true)
+  const contentId = React.useId()
 
   return (
     <div className="shrink-0 py-1">
-      <div className="flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium text-muted-foreground tabular-nums">
-        <Box className="size-3.5 shrink-0" />
-        <span>{title}</span>
+      <button
+        type="button"
+        aria-expanded={isExpanded}
+        aria-controls={contentId}
+        className="group flex min-h-9 w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-medium text-muted-foreground tabular-nums transition-colors hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        onClick={() => setIsExpanded((expanded) => !expanded)}
+      >
+        {isExpanded ? (
+          <ChevronDown className="size-3.5 shrink-0 transition-transform duration-150" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="size-3.5 shrink-0 transition-transform duration-150" aria-hidden="true" />
+        )}
+        <Box className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="sr-only">{isExpanded ? '，点击折叠' : '，点击展开'}</span>
+      </button>
+      <div id={contentId} hidden={!isExpanded}>
+        {hasEarlierChanges ? (
+          <>
+            {current.length > 0 && <NonGitRunGroup title="本轮" changes={current} sessionId={sessionId} onFileClick={onFileClick} />}
+            <NonGitRunGroup title="更早" changes={earlier} sessionId={sessionId} onFileClick={onFileClick} collapsible defaultCollapsed />
+          </>
+        ) : (
+          <NonGitFileList changes={current} sessionId={sessionId} onFileClick={onFileClick} />
+        )}
       </div>
-      {hasEarlierChanges ? (
-        <>
-          {current.length > 0 && <NonGitRunGroup title="本轮" changes={current} sessionId={sessionId} onFileClick={onFileClick} />}
-          <NonGitRunGroup title="更早" changes={earlier} sessionId={sessionId} onFileClick={onFileClick} />
-        </>
-      ) : (
-        <NonGitFileList changes={current} sessionId={sessionId} onFileClick={onFileClick} />
-      )}
     </div>
   )
 }
@@ -604,16 +660,49 @@ function NonGitRunGroup({
   changes,
   sessionId,
   onFileClick,
+  collapsible = false,
+  defaultCollapsed = false,
 }: {
   title: string
   changes: SessionFileChange[]
   sessionId: string
   onFileClick?: (filePath: string) => void
+  collapsible?: boolean
+  defaultCollapsed?: boolean
 }): React.ReactElement {
+  const [isExpanded, setIsExpanded] = React.useState(!defaultCollapsed)
+  const contentId = React.useId()
+  const headerClassName = "flex w-full items-center gap-1.5 px-3 py-1 text-left text-[11px] font-medium text-muted-foreground tabular-nums"
+  const headerContent = (
+    <>
+      {collapsible && (isExpanded ? (
+        <ChevronDown className="size-3 shrink-0 transition-transform duration-150" aria-hidden="true" />
+      ) : (
+        <ChevronRight className="size-3 shrink-0 transition-transform duration-150" aria-hidden="true" />
+      ))}
+      <span>{title} · {changes.length}</span>
+      {collapsible && <span className="sr-only">{isExpanded ? '，点击折叠' : '，点击展开'}</span>}
+    </>
+  )
+
   return (
     <section className="pb-2">
-      <div className="px-3 py-1 text-[11px] font-medium text-muted-foreground tabular-nums">{title} · {changes.length}</div>
-      <NonGitFileList changes={changes} sessionId={sessionId} onFileClick={onFileClick} />
+      {collapsible ? (
+        <button
+          type="button"
+          aria-expanded={isExpanded}
+          aria-controls={contentId}
+          className={cn(headerClassName, 'hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring')}
+          onClick={() => setIsExpanded((expanded) => !expanded)}
+        >
+          {headerContent}
+        </button>
+      ) : (
+        <div className={headerClassName}>{headerContent}</div>
+      )}
+      <div id={contentId} hidden={collapsible && !isExpanded}>
+        <NonGitFileList changes={changes} sessionId={sessionId} onFileClick={onFileClick} />
+      </div>
     </section>
   )
 }
