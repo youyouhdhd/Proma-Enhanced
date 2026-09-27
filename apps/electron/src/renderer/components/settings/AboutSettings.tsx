@@ -8,7 +8,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { RefreshCw, Loader2, CheckCircle2, AlertCircle, Info, Terminal, ChevronDown, ChevronUp, ExternalLink, RotateCw } from 'lucide-react'
-import type { EnvironmentCheckResult, RuntimeStatus, WindowsShellPreference } from '@proma/shared'
+import type { EnvironmentCheckResult, GitHubRelease, RuntimeStatus, WindowsShellPreference } from '@proma/shared'
 import {
   SettingsSection,
   SettingsCard,
@@ -33,20 +33,32 @@ const GITHUB_RELEASES_URL = 'https://github.com/youyouhdhd/Proma-Enhanced/releas
 function UpdateCard(): React.ReactElement | null {
   const available = useAtomValue(updaterAvailableAtom)
   const status = useAtomValue(updateStatusAtom)
-  const [checking, setChecking] = React.useState(false)
+  const [checkRequestPending, setCheckRequestPending] = React.useState(false)
+  const [checkRequestError, setCheckRequestError] = React.useState<string | null>(null)
   const [showReleaseNotes, setShowReleaseNotes] = React.useState(false)
-  const [release, setRelease] = React.useState<import('@proma/shared').GitHubRelease | null>(null)
-
-  // updater 不可用时不渲染
-  if (!available) return null
+  const [releaseForVersion, setReleaseForVersion] = React.useState<{
+    version: string
+    release: GitHubRelease
+  } | null>(null)
+  const release = releaseForVersion && releaseForVersion.version === status.version
+    ? releaseForVersion.release
+    : null
+  const isChecking = checkRequestPending || status.checking === true || status.status === 'checking'
+  const canCheck = !isChecking && status.status !== 'available' && status.status !== 'downloading'
+  const checkError = checkRequestError ?? (isChecking ? undefined : status.checkError)
+  const isStatusError = status.status === 'error'
+  const visibleError = isStatusError ? status.error || '未知错误' : checkError
 
   const handleCheck = async (): Promise<void> => {
-    setChecking(true)
+    if (!canCheck) return
+    setCheckRequestPending(true)
+    setCheckRequestError(null)
     try {
       await checkForUpdates()
+    } catch (error) {
+      setCheckRequestError(error instanceof Error ? error.message : String(error))
     } finally {
-      // 状态由 atom 订阅自动更新，延迟重置 checking 避免按钮闪烁
-      setTimeout(() => setChecking(false), 1000)
+      setCheckRequestPending(false)
     }
   }
 
@@ -65,38 +77,62 @@ function UpdateCard(): React.ReactElement | null {
       .catch((error) => console.error('[更新] 取消空闲更新失败:', error))
   }
 
-  // 当检测到新版本时，获取完整的 release 信息
+  React.useEffect(() => {
+    const version = status.version
+    if (status.status !== 'available' || !version) {
+      setReleaseForVersion(null)
+      setShowReleaseNotes(false)
+      return
+    }
+
+    let stale = false
+    setReleaseForVersion(null)
+    setShowReleaseNotes(false)
+    window.electronAPI
+      .getReleaseByTag(`v${version}`)
+      .then((result) => {
+        if (stale || !result) return
+        setReleaseForVersion({ version, release: result })
+        setShowReleaseNotes(true)
+      })
+      .catch((error) => {
+        if (!stale) console.error('[更新] 获取 Release 信息失败:', error)
+      })
+
+    return () => {
+      stale = true
+    }
+  }, [status.status, status.version])
 
   React.useEffect(() => {
-    if (status.status === 'available' && status.version && !release) {
-      window.electronAPI
-        .getReleaseByTag(`v${status.version}`)
-        .then((r) => {
-          if (r) {
-            setRelease(r)
-            setShowReleaseNotes(true)
-          }
-        })
-        .catch((err) => {
-          console.error('[更新] 获取 Release 信息失败:', err)
-        })
-    }
-  }, [status.status, status.version, release])
+    setCheckRequestError(null)
+  }, [status])
 
-  const isChecking = checking || status.status === 'checking' || status.status === 'downloading'
+  // updater 不可用时不渲染；放在所有 hooks 后保证调用顺序稳定。
+  if (!available) return null
+
   const hasReleaseNotes = status.releaseNotes || release?.body
 
   return (
     <SettingsCard>
-      <SettingsRow label="软件更新">
-        <div className="flex items-center gap-3">
+      <SettingsRow label="软件更新" className="flex-col items-stretch gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-3">
           {/* 状态文字 */}
-          <StatusText status={status.status} version={status.version} error={status.error} />
+          <div aria-live="polite" className="min-w-0">
+            <StatusText
+              status={status.status}
+              version={status.version}
+              error={status.error}
+              checkError={checkError}
+              isChecking={isChecking}
+            />
+          </div>
 
           {/* 操作按钮 */}
-          {status.status === 'downloaded' ? (
+          {status.status === 'downloaded' && (
             status.installScheduled ? (
               <button
+                type="button"
                 onClick={handleCancelIdleInstall}
                 className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors"
               >
@@ -104,42 +140,59 @@ function UpdateCard(): React.ReactElement | null {
               </button>
             ) : (
               <button
+                type="button"
                 onClick={handleInstallWhenIdle}
-                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                disabled={isChecking}
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
               >
                 <RotateCw className="h-3.5 w-3.5" />
                 空闲时更新
               </button>
             )
-          ) : status.status === 'available' ? (
+          )}
+          {status.status === 'available' && (
             <button
+              type="button"
               onClick={handleGoToDownload}
               className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               前往下载
             </button>
-          ) : (
-            <button
-              onClick={handleCheck}
-              disabled={isChecking}
-              className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
-            >
-              {isChecking ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3.5 w-3.5" />
-              )}
-              检查更新
-            </button>
           )}
+          <button
+            type="button"
+            onClick={handleCheck}
+            disabled={!canCheck}
+            aria-busy={isChecking}
+            className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
+          >
+            {isChecking ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            检查更新
+          </button>
         </div>
       </SettingsRow>
+
+      {visibleError && (
+        <div className="px-4 pb-4">
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription className="text-xs">
+              {isStatusError ? '更新失败' : '检查更新失败'}：{visibleError}
+            </AlertDescription>
+          </Alert>
+        </div>
+      )}
 
       {/* Release Notes（新版本可用时显示） */}
       {status.status === 'available' && hasReleaseNotes && (
         <div className="px-4 pb-4 border-t">
           <button
+            type="button"
             onClick={() => setShowReleaseNotes(!showReleaseNotes)}
             className="w-full flex items-center justify-between py-3 text-left hover:opacity-80 transition-opacity"
           >
@@ -167,14 +220,18 @@ function UpdateCard(): React.ReactElement | null {
 }
 
 /** 状态文字组件 */
-function StatusText({ status, version, error }: {
+function StatusText({ status, version, error, checkError, isChecking }: {
   status: string
   version?: string
   error?: string
+  checkError?: string
+  isChecking?: boolean
 }): React.ReactElement {
   switch (status) {
     case 'checking':
-      return <span className="text-xs text-muted-foreground">正在检查...</span>
+      return checkError
+        ? <span className="text-xs text-destructive flex items-center gap-1"><AlertCircle className="h-3 w-3" />检查更新失败</span>
+        : <span className="text-xs text-muted-foreground">正在检查...</span>
     case 'available':
       return (
         <span className="text-xs text-primary flex items-center gap-1">
@@ -190,6 +247,22 @@ function StatusText({ status, version, error }: {
         </span>
       )
     case 'downloaded':
+      if (checkError) {
+        return (
+          <span className="text-xs text-destructive flex items-center gap-1">
+            <AlertCircle className="h-3 w-3" />
+            检查失败，已有更新仍可安装
+          </span>
+        )
+      }
+      if (isChecking) {
+        return (
+          <span className="text-xs text-muted-foreground flex items-center gap-1">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            正在检查更新；已下载 v{version}，请稍候
+          </span>
+        )
+      }
       return (
         <span className="text-xs text-primary flex items-center gap-1">
           <CheckCircle2 className="h-3 w-3" />
@@ -207,7 +280,7 @@ function StatusText({ status, version, error }: {
       return (
         <span className="text-xs text-destructive flex items-center gap-1" title={error}>
           <AlertCircle className="h-3 w-3" />
-          检查失败
+          更新失败
         </span>
       )
     default:

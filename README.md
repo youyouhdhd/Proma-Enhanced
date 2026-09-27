@@ -2,7 +2,7 @@
 
 基于 [官方 Proma](https://github.com/proma-ai/Proma) 的增强 Fork，保留其本地优先的桌面 Agent 基础，并独立维护面向多项目、ChatGPT 连接和 Agent 使用体验的扩展。**自 v1.0.0 起，本仓库的版本号、安装包和更新来源均独立于上游。**
 
-[下载本 Fork 的最新版本](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.0 更新说明](./release-notes/v1.17.0.md) · [English](./README.en.md) · [Fork 维护与上游同步记录](./docs/fork-maintenance.md)
+[下载本 Fork 的最新版本](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.1 更新说明](./release-notes/v1.17.1.md) · [English](./README.en.md) · [Fork 维护与上游同步记录](./docs/fork-maintenance.md)
 
 ## 这个 Fork 增加了什么
 
@@ -19,6 +19,8 @@
 ![image-20260909165815654](https://img.erlich.fun/personal-blog/proma/image-20260909165815654.png)
 
 
+
+v1.17.1 改进软件更新：在“设置 → 关于 Proma → 软件更新”中，即使已有安装包就绪，也可点击“检查更新”；发现更高版本会自动下载替换，并在检查完成后再允许安排安装。详见 [更新说明](./release-notes/v1.17.1.md)。
 
 ## 上游 Proma 简介
 

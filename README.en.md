@@ -2,7 +2,7 @@
 
 An enhanced fork of [official Proma](https://github.com/proma-ai/Proma). It keeps Proma's local-first desktop Agent foundation and independently maintains extensions for multi-project work, ChatGPT connectivity, and Agent usability. **Since v1.0.0, this fork has had its own versions, installers, and update source.**
 
-[Download the latest fork release](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.0 release notes](./release-notes/v1.17.0.md) · [中文](./README.md) · [Fork maintenance and upstream sync](./docs/fork-maintenance.md)
+[Download the latest fork release](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.1 release notes](./release-notes/v1.17.1.md) · [中文](./README.md) · [Fork maintenance and upstream sync](./docs/fork-maintenance.md)
 
 ## What this fork adds
 
@@ -17,6 +17,8 @@ An enhanced fork of [official Proma](https://github.com/proma-ai/Proma). It keep
 Download Windows, macOS Apple Silicon/Intel, or Linux builds from [this fork's Releases](https://github.com/youyouhdhd/Proma-Enhanced/releases). [v1.17.0](./release-notes/v1.17.0.md) adds collapsible file changes, MiMo 2.6 support and Pi 0.87.1 while preserving account-based model discovery and existing provider channels. We sync commits already merged into `upstream/main`; see the [Fork Maintenance Guide](./docs/fork-maintenance.md) for the upstream base and merge decisions.
 
 ![Proma Poster](https://img.erlich.fun/personal-blog/uPic/pb.png)
+
+v1.17.1 keeps **Check for updates** available in Settings → About Proma even when an installer is already ready. A newer release replaces the pending download, and installation waits for the check to finish. See the [release notes](./release-notes/v1.17.1.md).
 
 ## About upstream Proma
 

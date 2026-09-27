@@ -27,6 +27,8 @@ interface UpdateStatus {
   progress?: { percent: number; transferred: number; total: number; bytesPerSecond: number }
   error?: string
   installScheduled?: boolean
+  checking?: boolean
+  checkError?: string
 }
 
 /** 更新 API */

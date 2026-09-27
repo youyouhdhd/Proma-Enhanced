@@ -10,7 +10,7 @@ export type UpdateStatus =
   | { status: 'checking' }
   | { status: 'available'; version: string; releaseNotes?: string }
   | { status: 'downloading'; version: string; progress: DownloadProgress }
-  | { status: 'downloaded'; version: string; installScheduled?: boolean }
+  | { status: 'downloaded'; version: string; installScheduled?: boolean; checking?: boolean; checkError?: string }
   | { status: 'not-available' }
   | { status: 'error'; error: string }
 

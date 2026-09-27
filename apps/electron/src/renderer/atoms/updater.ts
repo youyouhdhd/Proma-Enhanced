@@ -24,6 +24,10 @@ export interface UpdateStatus {
   error?: string
   /** 用户已安排在所有 Agent 空闲后重启安装，暂停重复提醒。 */
   installScheduled?: boolean
+  /** 已就绪的安装包仍可查询新版；检查期间暂缓安装。 */
+  checking?: boolean
+  /** 检查失败时保留就绪包，同时展示此次错误。 */
+  checkError?: string
 }
 
 /** 更新状态 atom */

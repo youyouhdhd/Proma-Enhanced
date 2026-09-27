@@ -22,15 +22,16 @@ let win: BrowserWindow | null = null
 
 /** 定时检查定时器 */
 let checkInterval: ReturnType<typeof setInterval> | null = null
+let initialCheckTimer: ReturnType<typeof setTimeout> | null = null
 
 /** 新版窗口稳定后执行的更新缓存清理定时器。 */
 let appliedUpdateCacheCleanupTimer: ReturnType<typeof setTimeout> | null = null
 
-/**
- * 已下载更新时仍会定期检查最新 Release。保留该快照可以在“更新源版本
- * 未变化”或检查失败时继续展示已就绪更新，也不会打断已经安排的空闲安装。
- */
-let downloadedStatusDuringCheck: Extract<UpdateStatus, { status: 'downloaded' }> | null = null
+/** 手动与定时检查共用同一个请求；检查完成前不安装可能已过期的目标。 */
+let checkPromise: Promise<void> | null = null
+let installImmediate: ReturnType<typeof setImmediate> | null = null
+/** 清理后忽略仍在网络中途的旧生命周期事件。 */
+let updaterEpoch = 0
 
 /** 当前主动下载的版本，用于合并 electron-updater 的 error 事件和 Promise rejection。 */
 let activeDownloadVersion: string | null = null
@@ -50,7 +51,9 @@ const APPLIED_UPDATE_CACHE_CLEANUP_MAX_RETRIES = 2
  * 状态检查留在主进程，避免渲染进程漏掉后台运行或其他窗口中的 Agent。
  */
 const idleInstallScheduler = createIdleInstallScheduler({
-  canInstall: () => currentStatus.status === 'downloaded' && !hasActiveAgents(),
+  canInstall: () => currentStatus.status === 'downloaded'
+    && !checkPromise && !activeDownloadVersion
+    && isNewerVersion(currentStatus.version, app.getVersion()) && !hasActiveAgents(),
   install: () => {
     console.log('[更新] 当前没有运行中的 Agent，开始安装已下载更新')
     quitAndInstall()
@@ -62,16 +65,22 @@ function setStatus(status: UpdateStatus): void {
   currentStatus = status
   if (status.status !== 'downloaded') {
     idleInstallScheduler.cancel()
+    if (installImmediate) {
+      clearImmediate(installImmediate)
+      installImmediate = null
+    }
   }
-  win?.webContents?.send(UPDATER_IPC_CHANNELS.ON_STATUS_CHANGED, status)
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+    win.webContents.send(UPDATER_IPC_CHANNELS.ON_STATUS_CHANGED, status)
+  }
 }
 
 /**
  * 处理主动下载的失败。electron-updater 可能同时发出 error 事件并 reject
  * downloadUpdate Promise，因此由 activeDownloadVersion 确保状态只恢复一次。
  */
-function handleDownloadFailure(err: unknown): void {
-  if (!activeDownloadVersion) return
+function handleDownloadFailure(version: string, err: unknown): void {
+  if (activeDownloadVersion !== version) return
 
   const failedVersion = activeDownloadVersion
   activeDownloadVersion = null
@@ -86,8 +95,26 @@ function handleDownloadFailure(err: unknown): void {
 }
 
 /** 开始下载已确认需要替换的最新更新。 */
-function downloadAvailableUpdate(): void {
-  void autoUpdater.downloadUpdate().catch(handleDownloadFailure)
+function downloadAvailableUpdate(version: string): void {
+  const epoch = updaterEpoch
+  void Promise.resolve().then(() => {
+    if (epoch !== updaterEpoch || activeDownloadVersion !== version) return
+    return autoUpdater.downloadUpdate()
+  }).catch((error: unknown) => {
+    if (epoch === updaterEpoch) handleDownloadFailure(version, error)
+  })
+}
+
+/** 检查的 error 事件及 Promise rejection 共用处理，不能在第二次失败时丢失就绪状态。 */
+function handleCheckFailure(err: unknown): void {
+  const error = err instanceof Error ? err.message : String(err)
+  console.error('[更新] 检查更新失败:', err)
+  if (checkPromise && currentStatus.status === 'downloaded'
+    && isNewerVersion(currentStatus.version, app.getVersion())) {
+    setStatus({ ...currentStatus, checkError: error })
+    return
+  }
+  setStatus({ status: 'error', error })
 }
 
 /**
@@ -107,33 +134,38 @@ export function getUpdateStatus(): UpdateStatus {
 }
 
 /** 手动触发检查更新 */
-export async function checkForUpdates(): Promise<void> {
+export function checkForUpdates(): Promise<void> {
+  if (!win || win.isDestroyed()) return Promise.resolve()
+  if (checkPromise) return checkPromise
   // 下载未完成时不能启动第二次下载；已下载版本仍需检查，以便追赶随后发布的新版。
-  if (currentStatus.status === 'downloading') {
+  if (activeDownloadVersion || currentStatus.status === 'downloading') {
     console.log('[更新] 跳过检查：正在下载更新')
-    return
+    return Promise.resolve()
   }
-
-  downloadedStatusDuringCheck = currentStatus.status === 'downloaded' ? currentStatus : null
-
-  try {
-    // 已有下载完成的更新时保持它在界面中可见，也保留用户已安排的空闲安装。
-    if (!downloadedStatusDuringCheck) {
-      setStatus({ status: 'checking' })
+  const operation: Promise<void> = Promise.resolve().then(async () => {
+    if (checkPromise !== operation) return
+    const result = await autoUpdater.checkForUpdates()
+    // 开发环境/禁用更新时 updater 返回 null，不应永久显示“正在检查”。
+    if (checkPromise === operation && result === null && currentStatus.status === 'checking') {
+      setStatus({ status: 'idle' })
     }
-    await autoUpdater.checkForUpdates()
-  } catch (err) {
-    console.error('[更新] 检查更新失败:', err)
-    if (downloadedStatusDuringCheck) {
-      console.warn('[更新] 保留已下载更新，稍后继续检查是否有新版')
-      downloadedStatusDuringCheck = null
-      return
+  }).catch((error: unknown) => {
+    if (checkPromise === operation) handleCheckFailure(error)
+  }).finally(() => {
+    if (checkPromise !== operation) return
+    checkPromise = null
+    if (currentStatus.status === 'downloaded') {
+      setStatus({ ...currentStatus, checking: false })
+      if (currentStatus.installScheduled) idleInstallScheduler.request()
     }
-    setStatus({
-      status: 'error',
-      error: err instanceof Error ? err.message : String(err),
-    })
+  })
+  checkPromise = operation
+  if (currentStatus.status === 'downloaded' && isNewerVersion(currentStatus.version, app.getVersion())) {
+    setStatus({ ...currentStatus, checking: true, checkError: undefined })
+  } else {
+    setStatus({ status: 'checking' })
   }
+  return operation
 }
 
 /**
@@ -142,7 +174,8 @@ export async function checkForUpdates(): Promise<void> {
  * @returns 是否已接受请求；仅 downloaded 状态可排队。
  */
 export function installWhenIdle(): boolean {
-  if (currentStatus.status !== 'downloaded') {
+  if (currentStatus.status !== 'downloaded' || activeDownloadVersion
+    || !isNewerVersion(currentStatus.version, app.getVersion())) {
     console.warn('[更新] 跳过空闲安装：当前没有已下载的更新')
     return false
   }
@@ -156,6 +189,10 @@ export function installWhenIdle(): boolean {
 /** 取消尚未执行的空闲安装请求。 */
 export function cancelIdleInstall(): void {
   idleInstallScheduler.cancel()
+  if (installImmediate) {
+    clearImmediate(installImmediate)
+    installImmediate = null
+  }
   if (currentStatus.status === 'downloaded' && currentStatus.installScheduled) {
     setStatus({ ...currentStatus, installScheduled: false })
   }
@@ -174,17 +211,17 @@ function quitAndInstall(): void {
     return
   }
 
-  if (hasActiveAgents()) {
-    console.log('[更新] 检测到运行中的 Agent，改为等待空闲后安装')
-    installWhenIdle()
-    return
-  }
+  if (currentStatus.status !== 'downloaded' || !currentStatus.installScheduled || installImmediate) return
+  const expectedVersion = currentStatus.version
 
   // 延迟调用确保 IPC 响应已发送回渲染进程；回调内再次检查防止竞态。
-  setImmediate(() => {
-    if (hasActiveAgents()) {
-      console.log('[更新] 安装前出现新的运行中 Agent，继续等待空闲')
-      installWhenIdle()
+  installImmediate = setImmediate(() => {
+    installImmediate = null
+    if (currentStatus.status !== 'downloaded' || currentStatus.version !== expectedVersion
+      || !currentStatus.installScheduled || !isNewerVersion(expectedVersion, app.getVersion())) return
+    if (checkPromise || activeDownloadVersion || hasActiveAgents()) {
+      console.log('[更新] 安装前仍有检查、下载或 Agent 任务，继续等待')
+      idleInstallScheduler.request()
       return
     }
 
@@ -198,6 +235,15 @@ function quitAndInstall(): void {
 
 /** 清理更新器资源（定时器等） */
 export function cleanupUpdater(): void {
+  updaterEpoch += 1
+  if (installImmediate) {
+    clearImmediate(installImmediate)
+    installImmediate = null
+  }
+  if (initialCheckTimer) {
+    clearTimeout(initialCheckTimer)
+    initialCheckTimer = null
+  }
   if (checkInterval) {
     clearInterval(checkInterval)
     checkInterval = null
@@ -206,9 +252,10 @@ export function cleanupUpdater(): void {
     clearTimeout(appliedUpdateCacheCleanupTimer)
     appliedUpdateCacheCleanupTimer = null
   }
-  downloadedStatusDuringCheck = null
+  checkPromise = null
   activeDownloadVersion = null
   idleInstallScheduler.dispose()
+  win = null
 }
 
 /**
@@ -217,7 +264,9 @@ export function cleanupUpdater(): void {
  * @param mainWindow - 主窗口实例，用于推送更新状态
  */
 export function initAutoUpdater(mainWindow: BrowserWindow): void {
+  cleanupUpdater()
   configureUpdater(mainWindow)
+  const epoch = ++updaterEpoch
 
   const updateCacheCleanup = createUpdateCacheCleanup({
     stateFilePath: join(app.getPath('userData'), 'updater-cache-state.json'),
@@ -285,23 +334,28 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
 
   // 监听更新事件
   autoUpdater.on('checking-for-update', () => {
+    if (epoch !== updaterEpoch) return
     console.log('[更新] 正在检查更新...')
-    if (!downloadedStatusDuringCheck) {
+    if (currentStatus.status === 'downloaded' && isNewerVersion(currentStatus.version, app.getVersion())) {
+      setStatus({ ...currentStatus, checking: true, checkError: undefined })
+    } else {
       setStatus({ status: 'checking' })
     }
   })
 
   autoUpdater.on('update-available', (info) => {
-    const downloadedStatus = downloadedStatusDuringCheck
-      ?? (currentStatus.status === 'downloaded' ? currentStatus : null)
+    if (epoch !== updaterEpoch) return
+    if (activeDownloadVersion) return
+    const downloadedStatus = currentStatus.status === 'downloaded' ? currentStatus : null
 
     if (downloadedStatus && !isNewerVersion(info.version, downloadedStatus.version)) {
       console.log(`[更新] 最新 Release v${info.version} 未超过已下载版本 v${downloadedStatus.version}，保留现有安装包`)
-      downloadedStatusDuringCheck = null
       return
     }
-
-    downloadedStatusDuringCheck = null
+    if (!isNewerVersion(info.version, app.getVersion())) {
+      setStatus({ status: 'not-available' })
+      return
+    }
     activeDownloadVersion = info.version
     console.log('[更新] 发现新版本:', info.version)
     setStatus({
@@ -311,14 +365,15 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
         ? info.releaseNotes
         : undefined,
     })
-    downloadAvailableUpdate()
+    downloadAvailableUpdate(info.version)
   })
 
   autoUpdater.on('download-progress', (progress) => {
-    downloadedStatusDuringCheck = null
+    if (epoch !== updaterEpoch) return
+    if (!activeDownloadVersion) return
     setStatus({
       status: 'downloading',
-      version: (currentStatus as { version?: string }).version || '',
+      version: activeDownloadVersion,
       progress: {
         percent: progress.percent,
         transferred: progress.transferred,
@@ -329,7 +384,11 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
   })
 
   autoUpdater.on('update-downloaded', (info) => {
-    downloadedStatusDuringCheck = null
+    if (epoch !== updaterEpoch) return
+    if (info.version !== activeDownloadVersion || !isNewerVersion(info.version, app.getVersion())) {
+      console.warn('[更新] 忽略不属于当前下载目标的完成事件:', info.version)
+      return
+    }
     activeDownloadVersion = null
     updateCacheCleanup.recordDownloadedUpdate(info.version, info.downloadedFile)
     console.log('[更新] 下载完成:', info.version)
@@ -341,9 +400,9 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
   })
 
   autoUpdater.on('update-not-available', () => {
-    if (downloadedStatusDuringCheck) {
+    if (epoch !== updaterEpoch) return
+    if (currentStatus.status === 'downloaded' && isNewerVersion(currentStatus.version, app.getVersion())) {
       console.log('[更新] 已下载版本仍是最新，保留现有安装包')
-      downloadedStatusDuringCheck = null
       return
     }
     console.log('[更新] 已是最新版本')
@@ -351,25 +410,19 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
   })
 
   autoUpdater.on('error', (err) => {
+    if (epoch !== updaterEpoch) return
     if (activeDownloadVersion) {
-      handleDownloadFailure(err)
+      // 此次 downloadUpdate 的 Promise 负责一次性收尾，避免迟到 rejection 污染下一轮。
+      console.error('[更新] 下载出错:', err)
       return
     }
 
-    console.error('[更新] 更新出错:', err)
-    if (downloadedStatusDuringCheck) {
-      console.warn('[更新] 保留已下载更新，稍后继续检查是否有新版')
-      downloadedStatusDuringCheck = null
-      return
-    }
-    setStatus({
-      status: 'error',
-      error: err.message,
-    })
+    handleCheckFailure(err)
   })
 
   // 启动后延迟 10 秒首次检查
-  setTimeout(() => {
+  initialCheckTimer = setTimeout(() => {
+    initialCheckTimer = null
     console.log('[更新] 首次自动检查更新')
     void checkForUpdates()
   }, 10_000)
@@ -382,18 +435,9 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
 
   // 窗口关闭时清理定时器
   mainWindow.on('closed', () => {
+    if (epoch !== updaterEpoch) return
     cancelAppliedUpdateCacheCleanup()
-    if (checkInterval) {
-      clearInterval(checkInterval)
-      checkInterval = null
-    }
-    if (appliedUpdateCacheCleanupTimer) {
-      clearTimeout(appliedUpdateCacheCleanupTimer)
-      appliedUpdateCacheCleanupTimer = null
-    }
-    downloadedStatusDuringCheck = null
-    activeDownloadVersion = null
-    idleInstallScheduler.dispose()
+    cleanupUpdater()
     win = null
   })
 
