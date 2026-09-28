@@ -96,6 +96,29 @@ export function updateChannelReasoningEffort(
   return { ...config, thinkingLevelMap }
 }
 
+/** 把 from 档位移动到 to 档位之前；from/to 相同或不存在时原样返回。 */
+export function moveChannelReasoningLevel(
+  config: ChannelModelReasoningConfig,
+  from: AgentThinkingLevel,
+  to: AgentThinkingLevel | 'end',
+): ChannelModelReasoningConfig {
+  const fromIndex = config.levels.indexOf(from)
+  const levels = [...config.levels]
+  if (to === 'end') {
+    if (fromIndex === -1) return config
+    const [moved] = levels.splice(fromIndex, 1)
+    if (!moved) return config
+    levels.push(moved)
+    return { ...config, levels }
+  }
+  const toIndex = config.levels.indexOf(to)
+  if (fromIndex === -1 || toIndex === -1 || from === to) return config
+  const [moved] = levels.splice(fromIndex, 1)
+  if (!moved) return config
+  levels.splice(fromIndex < toIndex ? toIndex - 1 : toIndex, 0, moved)
+  return { ...config, levels }
+}
+
 /** 解析 Chat 发送时的请求档位：思考开启时用会话档位或默认档位，关闭时仅发送 off。 */
 export function resolveConversationRequestReasoningLevel(input: {
   config?: ChannelModelReasoningConfig

@@ -121,6 +121,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   channelName?: string
   /** 频道模型级推理档位声明，供 Pi 运行时注册自建模型时编译为 reasoning_effort 能力。 */
   modelReasoning?: import('@proma/shared').ChannelModelReasoningConfig
+  /** 渠道模型级自定义上下文窗口（token 数），优先于 catalog 推断。 */
+  modelContextWindow?: number
   maxTurns?: number
   permissionMode: PromaPermissionMode
   canUseTool?: (

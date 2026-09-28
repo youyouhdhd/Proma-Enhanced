@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { AgentThinkingLevel } from '@proma/shared'
 import {
   addChannelReasoningLevel,
   createReasoningCapabilityKey,
@@ -6,6 +7,7 @@ import {
   removeChannelReasoningLevel,
   resolveConversationReasoningCapability,
   resolveConversationRequestReasoningLevel,
+  moveChannelReasoningLevel,
   updateChannelReasoningEffort,
 } from './channel-model-reasoning'
 
@@ -52,6 +54,36 @@ describe('频道模型自定义推理档位', () => {
     }, 'off', 'none')
     expect(configured.thinkingLevelMap).toEqual({ off: 'none' })
     expect(updateChannelReasoningEffort(configured, 'off', '  ').thinkingLevelMap).toEqual({})
+  })
+
+  test('拖拽排序：向前移动档位保持目标之前的语义', () => {
+    expect(moveChannelReasoningLevel({
+      levels: ['low', 'medium', 'high'],
+      defaultLevel: 'high',
+    }, 'high', 'low')).toEqual({
+      levels: ['high', 'low', 'medium'],
+      defaultLevel: 'high',
+    })
+  })
+
+  test('拖拽排序：向后移动档位插入到目标之前', () => {
+    expect(moveChannelReasoningLevel({
+      levels: ['low', 'medium', 'high'],
+      defaultLevel: 'high',
+    }, 'low', 'high')).toEqual({
+      levels: ['medium', 'low', 'high'],
+      defaultLevel: 'high',
+    })
+  })
+
+  test('拖拽排序：end 目标追加到末尾，相同或缺失档位原样返回', () => {
+    expect(moveChannelReasoningLevel({
+      levels: ['low', 'medium', 'high'],
+      defaultLevel: 'high',
+    }, 'low', 'end').levels).toEqual(['medium', 'high', 'low'])
+    const config = { levels: ['low', 'high'] as AgentThinkingLevel[], defaultLevel: 'high' as AgentThinkingLevel }
+    expect(moveChannelReasoningLevel(config, 'low', 'low')).toBe(config)
+    expect(moveChannelReasoningLevel(config, 'medium' as AgentThinkingLevel, 'high')).toBe(config)
   })
 
   test('同一模型的推理配置变化时生成不同 capability 缓存键', () => {

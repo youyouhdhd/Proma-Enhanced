@@ -44,6 +44,27 @@ describe('自建模型推理能力', () => {
     })
   })
 
+  test('未配置映射的 xhigh/max 档位补自映射，避免 Pi 运行时钳制到 high', () => {
+    expect(compilePiChannelReasoningCapabilities('openai-completions', {
+      levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultLevel: 'high',
+    })).toEqual({
+      compat: { supportsReasoningEffort: true, supportsStrictMode: false },
+      thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+    })
+  })
+
+  test('显式配置的 xhigh/max 映射优先于自映射', () => {
+    expect(compilePiChannelReasoningCapabilities('openai-completions', {
+      levels: ['high', 'xhigh'],
+      defaultLevel: 'high',
+      thinkingLevelMap: { high: 'xhigh', xhigh: 'xhigh' },
+    })).toEqual({
+      compat: { supportsReasoningEffort: true, supportsStrictMode: false },
+      thinkingLevelMap: { high: 'xhigh', xhigh: 'xhigh' },
+    })
+  })
+
   test('频道声明为目录外模型提供会话级滑杆能力', async () => {
     await expect(resolvePiReasoningCapability('openai', 'qwen3.8-27b-q8', {
       ...reasoning,

@@ -12,6 +12,7 @@ import {
   extractZhipuCodingTeamApiToken,
   inferContextWindow,
   inferCodexAlignedGPT5ContextWindow,
+  parseCustomContextWindow,
   resolveChannelReasoningCapability,
   getGeminiModelCapability,
   isMimoV26Model,
@@ -149,7 +150,14 @@ export function compilePiChannelReasoningCapabilities(
   const thinkingLevelMap: Partial<Record<(typeof capability.levels)[number], string | null>> = {}
   for (const level of capability.levels) {
     const mapped = config.thinkingLevelMap?.[level]
-    if (typeof mapped === 'string' || mapped === null) thinkingLevelMap[level] = mapped
+    if (typeof mapped === 'string' || mapped === null) {
+      thinkingLevelMap[level] = mapped
+    } else if (level === 'xhigh' || level === 'max') {
+      // Pi 的 getSupportedThinkingLevels 对扩展档位（xhigh/max）要求显式映射才算支持，
+      // 否则 setThinkingLevel 会静默钳制到 high。为未配置映射的扩展档位补自映射，
+      // 保证用户在渠道里声明的档位原样发送到上游。
+      thinkingLevelMap[level] = level
+    }
   }
 
   return {
@@ -762,6 +770,7 @@ async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiMod
   const catalogContextWindow = catalogModel?.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   const inferredContextWindow = inferContextWindow(input.model) ?? DEFAULT_CONTEXT_WINDOW
   const shouldForceAdaptiveThinking = shouldForcePiAdaptiveThinking(api, catalogModel, input.model)
+  const customContextWindow = parseCustomContextWindow(input.modelContextWindow)
   return {
     api,
     reasoning: channelSpecificCapabilities ? true : (catalogModel?.reasoning ?? true),
@@ -774,7 +783,10 @@ async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiMod
     input: catalogModel ? [...catalogModel.input] : ['text', 'image'],
     cost: catalogModel ? { ...catalogModel.cost } : { ...ZERO_MODEL_COST },
     // Codex 对齐策略优先；其他模型仍保留 catalog 与 shared inference 中更大的已验证能力。
-    contextWindow: codexAlignedCapabilities?.contextWindow ?? Math.max(catalogContextWindow, inferredContextWindow),
+    // 用户在渠道模型上配置的窗口是最终声明，优先于 catalog 推断。
+    contextWindow: customContextWindow
+      ?? codexAlignedCapabilities?.contextWindow
+      ?? Math.max(catalogContextWindow, inferredContextWindow),
     // Pi catalog 缺少时，GLM-5.3 系列仍按官方 128K 输出上限注册。
     maxTokens: isVolcengineGlm5x
       ? VOLCENGINE_GLM_MAX_TOKENS

@@ -23,6 +23,7 @@ import {
   Download,
   Search,
   Settings2,
+  GripVertical,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useSetAtom } from 'jotai'
@@ -66,9 +67,11 @@ import {
   addChannelReasoningLevel,
   CHANNEL_REASONING_LEVELS,
   createChannelReasoningConfig,
+  moveChannelReasoningLevel,
   removeChannelReasoningLevel,
   updateChannelReasoningEffort,
 } from '@/lib/channel-model-reasoning'
+import { parseCustomContextWindow } from '@proma/shared'
 import {
   normalizeBaseUrl,
   resolveAnthropicMessagesUrl,
@@ -279,6 +282,9 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
   const [modelFilter, setModelFilter] = React.useState('')
   const [expandedReasoningModelId, setExpandedReasoningModelId] = React.useState<string | null>(null)
   const [reasoningLevelToAdd, setReasoningLevelToAdd] = React.useState<AgentThinkingLevel | ''>('')
+  const [reasoningDragLevel, setReasoningDragLevel] = React.useState<AgentThinkingLevel | null>(null)
+  const [reasoningDropTarget, setReasoningDropTarget] = React.useState<{ level: AgentThinkingLevel; position: 'before' | 'after' } | null>(null)
+  const [contextWindowDrafts, setContextWindowDrafts] = React.useState<Record<string, string>>({})
 
   // UI 状态
   const [saving, setSaving] = React.useState(false)
@@ -664,6 +670,47 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
         ? { ...model, reasoning: updateChannelReasoningEffort(model.reasoning, level, effort) }
         : model
     )))
+  }
+
+  const handleModelReasoningLevelMove = (
+    modelId: string,
+    from: AgentThinkingLevel,
+    to: AgentThinkingLevel | 'end',
+  ): void => {
+    setModels((prev) => prev.map((model) => (
+      model.id === modelId && model.reasoning
+        ? { ...model, reasoning: moveChannelReasoningLevel(model.reasoning, from, to) }
+        : model
+    )))
+  }
+
+  const handleModelContextWindowInput = (modelId: string, value: string): void => {
+    setContextWindowDrafts((prev) => ({ ...prev, [modelId]: value }))
+  }
+
+  const handleModelContextWindowCommit = (modelId: string): void => {
+    const draft = contextWindowDrafts[modelId] ?? ''
+    const parsed = draft.trim() === '' ? undefined : parseCustomContextWindow(draft)
+    setModels((prev) => prev.map((model) => (
+      model.id === modelId ? { ...model, contextWindow: parsed } : model
+    )))
+    setContextWindowDrafts((prev) => {
+      const next = { ...prev }
+      if (parsed === undefined) delete next[modelId]
+      else next[modelId] = String(parsed)
+      return next
+    })
+  }
+
+  const handleModelContextWindowRemove = (modelId: string): void => {
+    setModels((prev) => prev.map((model) => (
+      model.id === modelId ? { ...model, contextWindow: undefined } : model
+    )))
+    setContextWindowDrafts((prev) => {
+      const next = { ...prev }
+      delete next[modelId]
+      return next
+    })
   }
 
 
@@ -1685,6 +1732,41 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
                         </div>
                         {model.reasoning && (
                           <div className="space-y-2.5">
+                            <div className="flex items-center gap-3">
+                              <span className="w-20 shrink-0 text-xs text-muted-foreground">上下文窗口</span>
+                              <Input
+                                type="number"
+                                min={8000}
+                                max={10000000}
+                                step={1000}
+                                value={contextWindowDrafts[model.id] ?? model.contextWindow ?? ''}
+                                onChange={(e) => handleModelContextWindowInput(model.id, e.target.value)}
+                                onBlur={() => handleModelContextWindowCommit(model.id)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.currentTarget.blur()
+                                  }
+                                }}
+                                placeholder="留空则按模型推断"
+                                className="h-8 flex-1 text-xs"
+                                aria-label={`${model.name} 自定义上下文窗口（token）`}
+                              />
+                              {model.contextWindow != null && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                                  onClick={() => handleModelContextWindowRemove(model.id)}
+                                  aria-label={`清除${model.name} 自定义上下文窗口`}
+                                >
+                                  <X size={14} />
+                                </Button>
+                              )}
+                            </div>
+                            <div className="text-xs text-muted-foreground -mt-1">
+                              token 数（8,000 – 10,000,000）。覆盖会话进度环分母与 Pi 运行时窗口；留空时按模型 ID 推断。
+                            </div>
                             {model.reasoning.levels.length > 0 && (
                               <div className="flex items-center gap-3">
                                 <span className="w-20 shrink-0 text-xs text-muted-foreground">默认档位</span>
@@ -1709,8 +1791,59 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
                               </div>
                             )}
                             {model.reasoning.levels.map((level) => (
-                              <div key={level} className="flex items-center gap-2">
-                                <span className="w-20 shrink-0 text-xs text-foreground">
+                              <div key={level} className="relative flex items-center gap-2">
+                                {reasoningDropTarget?.level === level && reasoningDropTarget.position === 'before' && (
+                                  <div className="absolute -top-1 left-0 right-0 h-0.5 bg-primary rounded-full" />
+                                )}
+                                <span
+                                  className={cn(
+                                    'flex items-center gap-0.5 shrink-0 cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-foreground',
+                                    reasoningDragLevel === level && 'opacity-40',
+                                  )}
+                                  draggable
+                                  onDragStart={(event) => {
+                                    setReasoningDragLevel(level)
+                                    event.dataTransfer.effectAllowed = 'move'
+                                    event.dataTransfer.setData('text/plain', level)
+                                  }}
+                                  onDragOver={(event) => {
+                                    if (!reasoningDragLevel || reasoningDragLevel === level) return
+                                    event.preventDefault()
+                                    event.dataTransfer.dropEffect = 'move'
+                                    const rect = event.currentTarget.getBoundingClientRect()
+                                    const ratio = (event.clientY - rect.top) / rect.height
+                                    const position = ratio < 0.5 ? 'before' : 'after'
+                                    if (reasoningDropTarget?.level === level && reasoningDropTarget.position === position) return
+                                    setReasoningDropTarget({ level, position })
+                                  }}
+                                  onDragLeave={() => {
+                                    if (reasoningDropTarget?.level === level) setReasoningDropTarget(null)
+                                  }}
+                                  onDrop={(event) => {
+                                    event.preventDefault()
+                                    if (reasoningDragLevel && reasoningDragLevel !== level
+                                      && reasoningDropTarget?.level === level) {
+                                      const from = reasoningDragLevel
+                                      const levelIndex = model.reasoning?.levels.indexOf(level) ?? -1
+                                      const nextLevel = model.reasoning?.levels[levelIndex + 1]
+                                      const to = reasoningDropTarget.position === 'before'
+                                        ? level
+                                        : (nextLevel ?? 'end')
+                                      if (from !== to) handleModelReasoningLevelMove(model.id, from, to)
+                                    }
+                                    setReasoningDragLevel(null)
+                                    setReasoningDropTarget(null)
+                                  }}
+                                  onDragEnd={() => {
+                                    setReasoningDragLevel(null)
+                                    setReasoningDropTarget(null)
+                                  }}
+                                  title="拖动调整档位顺序"
+                                  aria-label={`拖动排序${CHANNEL_REASONING_LEVEL_LABELS[level]}档位`}
+                                >
+                                  <GripVertical size={14} />
+                                </span>
+                                <span className="w-16 shrink-0 text-xs text-foreground">
                                   {CHANNEL_REASONING_LEVEL_LABELS[level]}
                                 </span>
                                 <Input
@@ -1734,6 +1867,9 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
                                 >
                                   <X size={14} />
                                 </Button>
+                                {reasoningDropTarget?.level === level && reasoningDropTarget.position === 'after' && (
+                                  <div className="absolute -bottom-1 left-0 right-0 h-0.5 bg-primary rounded-full" />
+                                )}
                               </div>
                             ))}
                             {model.reasoning.levels.length === 0 && (

@@ -152,3 +152,23 @@ export function inferContextWindow(model?: string): number | undefined {
   if (supports1MContext(model)) return ONE_MILLION_CONTEXT_WINDOW
   return DEFAULT_CONTEXT_WINDOW
 }
+
+/** 自定义上下文窗口的最小值，防止误输入导致会话被过早压缩。 */
+export const MIN_CUSTOM_CONTEXT_WINDOW = 8_000
+
+/** 自定义上下文窗口的最大值。 */
+export const MAX_CUSTOM_CONTEXT_WINDOW = 10_000_000
+
+/**
+ * 校验渠道模型的自定义上下文窗口。
+ * 非整数、越界或非法值返回 undefined，调用方按未配置处理。
+ */
+export function parseCustomContextWindow(value: string | number | undefined | null): number | undefined {
+  if (value === undefined || value === null) return undefined
+  const trimmed = typeof value === 'number' ? value : value.trim()
+  if (trimmed === '') return undefined
+  const parsed = typeof trimmed === 'number' ? trimmed : Number(trimmed)
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return undefined
+  if (parsed < MIN_CUSTOM_CONTEXT_WINDOW || parsed > MAX_CUSTOM_CONTEXT_WINDOW) return undefined
+  return parsed
+}

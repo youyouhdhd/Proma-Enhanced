@@ -253,8 +253,9 @@ function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now(
 function resolveRunContextWindow(
   modelId: string | undefined,
   previous: number | undefined,
+  customWindow: number | undefined,
 ): number | undefined {
-  return inferContextWindow(modelId) ?? previous
+  return customWindow ?? inferContextWindow(modelId) ?? previous
 }
 
 interface SDKMessageRecord {
@@ -839,7 +840,9 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       transport: inferReasoningTransport(agentChannelProvider),
     })
     : undefined
-  const modelReasoningConfig = agentChannel?.models.find((model) => model.id === agentModelId)?.reasoning
+  const agentChannelModel = agentChannel?.models.find((model) => model.id === agentModelId)
+  const modelReasoningConfig = agentChannelModel?.reasoning
+  const modelContextWindow = agentChannelModel?.contextWindow
   const reasoningCapabilityKey = createReasoningCapabilityKey({
     channelId: agentChannelId,
     modelId: agentModelId,
@@ -2290,7 +2293,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
         inputTokens: existing?.inputTokens,
-        contextWindow: resolveRunContextWindow(agentModelId || undefined, existing?.contextWindow),
+        contextWindow: resolveRunContextWindow(agentModelId || undefined, existing?.contextWindow, modelContextWindow),
       })
       return map
     })
@@ -2340,7 +2343,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
         return map
       })
     })
-  }, [createBaseAdditionalDirectories, preparePendingFilesForSend, restoreQueuedAttachmentsToPending, sessionId, agentChannelId, agentModelId, agentChannelProvider, currentWorkspaceId, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, consumeQuotedSelection, setStreamingStates, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, setDraftSessionIds, setAgentSessions, permissionMode, messagesLoaded, setQueuedMessages, setQuotedSelectionMap, sendPlainTextAgentMessage, isLegacyTranscript, isStopping])
+  }, [createBaseAdditionalDirectories, preparePendingFilesForSend, restoreQueuedAttachmentsToPending, sessionId, agentChannelId, agentModelId, agentChannelProvider, modelContextWindow, currentWorkspaceId, streaming, backgroundWaiting, suggestion, hasAvailableModel, store, consumeQuotedSelection, setStreamingStates, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, setDraftSessionIds, setAgentSessions, permissionMode, messagesLoaded, setQueuedMessages, setQuotedSelectionMap, sendPlainTextAgentMessage, isLegacyTranscript, isStopping])
 
   /** 停止生成。异常流未发出终态时，允许再次下发幂等的 abort 请求。 */
   const handleStop = React.useCallback((): void => {
@@ -2522,7 +2525,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
         inputTokens: existing?.inputTokens,
-        contextWindow: resolveRunContextWindow(agentModelId || undefined, existing?.contextWindow),
+        contextWindow: resolveRunContextWindow(agentModelId || undefined, existing?.contextWindow, modelContextWindow),
       })
       return map
     })
@@ -2539,7 +2542,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       permissionModeOverride: permissionMode,
       ...(retryOfErrorUuid && { retryOfErrorUuid }),
     }).catch(console.error)
-  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, agentChannelProvider, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates, setMessagesCache, permissionMode])
+  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, agentChannelProvider, modelContextWindow, currentWorkspaceId, streaming, setAgentStreamErrors, setStreamingStates, setMessagesCache, permissionMode])
 
   /** 在新对话继续：创建新会话 + 切换 tab + 使用 &session 引用旧会话 */
   const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {

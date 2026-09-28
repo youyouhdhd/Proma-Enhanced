@@ -343,6 +343,8 @@ export interface ChannelModel {
   source?: 'manual' | 'fetched'
   /** 自建 OpenAI 兼容模型的推理档位声明。 */
   reasoning?: ChannelModelReasoningConfig
+  /** 自定义上下文窗口（token 数）；未配置时按模型 ID 推断。 */
+  contextWindow?: number
 }
 
 /**

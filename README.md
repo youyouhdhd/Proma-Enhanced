@@ -2,7 +2,7 @@
 
 基于 [官方 Proma](https://github.com/proma-ai/Proma) 的增强 Fork，保留其本地优先的桌面 Agent 基础，并独立维护面向多项目、ChatGPT 连接和 Agent 使用体验的扩展。**自 v1.0.0 起，本仓库的版本号、安装包和更新来源均独立于上游。**
 
-[下载本 Fork 的最新版本](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.2 更新说明](./release-notes/v1.17.2.md) · [English](./README.en.md) · [Fork 维护与上游同步记录](./docs/fork-maintenance.md)
+[下载本 Fork 的最新版本](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.3 更新说明](./release-notes/v1.17.3.md) · [English](./README.en.md) · [Fork 维护与上游同步记录](./docs/fork-maintenance.md)
 
 ## 这个 Fork 增加了什么
 
@@ -20,7 +20,7 @@
 
 
 
-v1.17.2 为 Agent 执行过程区增加与外层会话滚动条独立的可见滑条：流式期间可直接拖动定位并暂停/恢复自动跟随，历史消息展开后过程内容在受限视口内独立滚动。详见 [更新说明](./release-notes/v1.17.2.md)。
+v1.17.3 修复自建渠道模型 xhigh/max 推理档位被静默降级为 high 的问题，新增渠道模型自定义上下文窗口与推理档位拖拽排序。详见 [更新说明](./release-notes/v1.17.3.md)。
 
 ## 上游 Proma 简介
 

@@ -31,6 +31,7 @@ import {
   normalizePathForCompare,
   normalizeMcpTransportType,
   inferContextWindow,
+  parseCustomContextWindow,
   inferReasoningTransport,
   resolveReasoningProfile,
   collectSkillActivations,
@@ -1536,7 +1537,9 @@ export class AgentOrchestrator {
         ? appSettings.agentMaxTurns
         : undefined
       // 查找当前模型的频道级推理声明，传入能力解析以支持自建模型推理档位
-      const modelReasoning = channel.models.find((model) => model.id === selectedModelId)?.reasoning
+      const selectedChannelModel = channel.models.find((model) => model.id === selectedModelId)
+      const modelReasoning = selectedChannelModel?.reasoning
+      const modelContextWindow = selectedChannelModel?.contextWindow
       const piReasoningCapability = await resolvePiReasoningCapability(channel.provider, selectedModelId, modelReasoning)
       const piThinkingLevel = resolvePiThinkingLevel(appSettings, sessionMeta, channel.provider, selectedModelId, piReasoningCapability)
       const projectInstructions = workspaceSlug
@@ -1644,7 +1647,9 @@ export class AgentOrchestrator {
         })
       }
       const handleContextWindow = (cw: number): void => {
-        const inferredWindow = inferContextWindow(modelId)
+        // 渠道模型的自定义窗口是用户声明的真实能力，SDK result 值只作参考。
+        const declaredWindow = parseCustomContextWindow(modelContextWindow)
+        const inferredWindow = declaredWindow ?? inferContextWindow(modelId)
         const contextWindow = Math.max(cw, inferredWindow ?? 0) || cw
         console.log(`[Agent 编排] 缓存 contextWindow: ${contextWindow}`)
         // result 消息里的真实 contextWindow 透传到 renderer，
@@ -1671,6 +1676,7 @@ export class AgentOrchestrator {
         channelName: channel.name,
         // 将频道推理声明透传给 Pi 运行时，供模型注册时编译为 reasoning_effort 能力
         ...(modelReasoning && { modelReasoning }),
+        ...(modelContextWindow != null && { modelContextWindow }),
         proxyUrl,
         runtimeEnv,
         ...(maxTurns != null && { maxTurns }),
