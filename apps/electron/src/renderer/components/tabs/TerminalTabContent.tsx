@@ -96,18 +96,13 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmo
     let restoring = true
     let lastRenderedSequence = 0
     const pendingOutput: TerminalOutputEvent[] = []
-    const acknowledge = (sequence: number): void => {
-      if (sequence > 0) window.electronAPI.acknowledgeTerminalOutput({ terminalId, sequence })
-    }
     const renderOutput = (event: TerminalOutputEvent): void => {
       if (event.sequence <= lastRenderedSequence) {
-        acknowledge(event.sequence)
         return
       }
       terminal.write(event.data, () => {
         if (disposed) return
         lastRenderedSequence = event.sequence
-        acknowledge(event.sequence)
       })
     }
     const flushPendingOutput = (): void => {
@@ -118,6 +113,10 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmo
     const disposeInput = terminal.onData((data) => {
       void window.electronAPI.writeTerminal({ terminalId, data }).catch(console.error)
     })
+    const focusTerminal = (event: Event): void => {
+      if ((event as CustomEvent<{ terminalId: string }>).detail?.terminalId === terminalId) terminal.focus()
+    }
+    window.addEventListener('proma:focus-terminal', focusTerminal)
     const disposeOutput = window.electronAPI.onTerminalOutput((event) => {
       if (event.terminalId !== terminalId) return
       if (restoring) pendingOutput.push(event)
@@ -148,7 +147,6 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmo
         terminal.write(snapshot.output, () => {
           if (disposed) return
           lastRenderedSequence = snapshot.sequence
-          acknowledge(snapshot.sequence)
           restoring = false
           flushPendingOutput()
           terminal.focus()
@@ -165,6 +163,7 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmo
       disposed = true
       resizeObserver.disconnect()
       disposeInput.dispose()
+      window.removeEventListener('proma:focus-terminal', focusTerminal)
       disposeOutput()
       disposeExit()
       terminal.dispose()

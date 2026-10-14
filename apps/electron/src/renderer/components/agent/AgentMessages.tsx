@@ -47,7 +47,7 @@ import { TaskProgressOverlay, type ContextCompactionProgress } from './TaskProgr
 import { createMessageGroupRenderCache, groupMessagesForRendering } from './message-group-rendering'
 import type { AgentEventUsage, RetryAttempt, SDKAssistantMessage, SDKMessage, SDKSystemMessage, SDKTextBlock, SDKThinkingBlock } from '@proma/shared'
 import { getSDKCompactStatus } from '@proma/shared'
-import { agentLiveMessagesAtomFamily, agentSessionStreamingStateAtomFamily, type AgentStreamState } from '@/atoms/agent-atoms'
+import { agentLiveMessagesAtomFamily, agentSessionStreamingStateAtomFamily, agentSessionInteractionLabelAtomFamily, type AgentStreamState } from '@/atoms/agent-atoms'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -905,6 +905,7 @@ export const AgentMessages = React.memo(function AgentMessages({
   const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
   const liveMessages = useAtomValue(agentLiveMessagesAtomFamily(sessionId))
   const streaming = streamState?.running ?? false
+  const interactionLabel = useAtomValue(agentSessionInteractionLabelAtomFamily(sessionId))
   const userProfile = useAtomValue(userProfileAtom)
   const channels = useAtomValue(channelsAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
@@ -1242,7 +1243,8 @@ export const AgentMessages = React.memo(function AgentMessages({
               {/* 有实时助手内容时：显示运行指示器或占位（防止 streaming 结束到 Actions Bar 出现之间的高度跳动） */}
               {/* 不使用 mt：ConversationContent 的 gap-1(4px) 已提供间距，
                   匹配内部 MessageActions 的 gap-0.5(2px)+mt-0.5(2px)=4px 间距 */}
-              {hasLiveAssistantContent && !suppressAgentRunning && (
+              {interactionLabel && <div className="pl-[56px] min-h-[28px] text-sm text-primary" role="status">{interactionLabel}</div>}
+              {hasLiveAssistantContent && !suppressAgentRunning && !interactionLabel && (
                 <div className="pl-[56px] min-h-[28px]">
                   {retrying && <RetryingNotice retrying={retrying} />}
                   {streaming && <AgentRunningIndicator startedAt={startedAt} />}
@@ -1250,7 +1252,7 @@ export const AgentMessages = React.memo(function AgentMessages({
               )}
 
               {/* 首个 live assistant block 到达前，先乐观渲染 assistant 外壳和 Logo；文本仍完全由 SDKMessage 渲染。 */}
-              {!hasLiveAssistantContent && !suppressAgentRunning && (streaming || retrying) && (
+              {!hasLiveAssistantContent && !suppressAgentRunning && !interactionLabel && (streaming || retrying) && (
                 <Message from="assistant">
                   <MessageHeader
                     model={optimisticModel}

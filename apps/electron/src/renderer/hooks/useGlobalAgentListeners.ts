@@ -10,6 +10,7 @@
 import { useEffect } from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useStore } from 'jotai'
+import { queuePendingInteraction, resolvePendingInteraction } from '@/lib/pending-interactions'
 import {
   agentStreamingStatesAtom,
   agentSessionStreamingStateAtomFamily,
@@ -586,6 +587,7 @@ export function useGlobalAgentListeners(): void {
   const store = useStore()
 
   useEffect(() => {
+    let disposed = false
     const clearCompletionAttention = (sessionId: string): void => {
       store.set(unviewedCompletedSessionIdsAtom, (prev) => markSessionCompletionViewed(prev, sessionId))
       store.set(unviewedCompletedDelegatedSessionIdsAtom, (prev) => markSessionCompletionViewed(prev, sessionId))
@@ -947,6 +949,8 @@ export function useGlobalAgentListeners(): void {
       bumpPreviewContentRefresh(sessionId, planPreview)
     }
 
+    const resolvedAskUserRequestIds = new Set<string>()
+    const resolvedPermissionRequestIds = new Set<string>()
     // pending 快照与实时事件可以乱序抵达。保留有限的已解决 ID，避免迟到快照复活已处理横幅。
     const resolvedExitPlanRequestIds = new Set<string>()
     const markExitPlanRequestResolved = (requestId: string): void => {
@@ -982,17 +986,6 @@ export function useGlobalAgentListeners(): void {
       })
       return inserted
     }
-
-    // renderer 重载后，主进程仍保留未决审批；恢复横幅时同步重建只读计划预览。
-    void window.electronAPI.getPendingRequests()
-      .then(({ exitPlans }) => {
-        for (const request of exitPlans) {
-          if (queueExitPlanRequest(request) && request.planDocument) {
-            openPlanDocumentPreview(request.sessionId, request.planDocument)
-          }
-        }
-      })
-      .catch((error) => console.warn('[GlobalAgentListeners] 恢复待处理审批请求失败', error))
 
     const refreshAffectedPreviews = (filePaths: readonly string[]): void => {
       if (filePaths.length === 0) return
@@ -1594,12 +1587,7 @@ export function useGlobalAgentListeners(): void {
             })
           } else if (event.type === 'permission_request') {
             // 权限请求入队（统一通道，不区分当前/后台会话）
-            store.set(allPendingPermissionRequestsAtom, (prev) => {
-              const map = new Map(prev)
-              const current = map.get(sessionId) ?? []
-              map.set(sessionId, [...current, event.request])
-              return map
-            })
+            store.set(allPendingPermissionRequestsAtom, (prev) => queuePendingInteraction(prev, event.request, resolvedPermissionRequestIds))
             // 桌面通知（带提示音 + 会话导航）
             sendBlockingNotification(
               sessionId,
@@ -1609,34 +1597,21 @@ export function useGlobalAgentListeners(): void {
                 : 'Agent 需要你的权限确认',
               'permissionRequest'
             )
+          } else if (event.type === 'permission_resolved') {
+            store.set(allPendingPermissionRequestsAtom, (prev) => resolvePendingInteraction(prev, event.requestId, resolvedPermissionRequestIds))
           } else if (event.type === 'ask_user_request') {
             // AskUser 请求入队（统一通道，不区分当前/后台会话）
-            store.set(allPendingAskUserRequestsAtom, (prev) => {
-              const map = new Map(prev)
-              const current = map.get(sessionId) ?? []
-              map.set(sessionId, [...current, event.request])
-              return map
-            })
+            store.set(allPendingAskUserRequestsAtom, (prev) => queuePendingInteraction(prev, event.request, resolvedAskUserRequestIds))
             // 桌面通知（带提示音 + 会话导航）
             sendBlockingNotification(
               sessionId,
-              'Agent 需要你的输入',
+              event.request.terminal ? '终端等待你操作' : 'Agent 需要你的输入',
               event.request.questions[0]?.question ?? 'Agent 有问题需要你回答',
               'permissionRequest'
             )
           } else if (event.type === 'ask_user_resolved') {
             // AskUser 可能由协作父会话代答，收到 resolved 后清理所有会话中的残留请求和草稿
-            store.set(allPendingAskUserRequestsAtom, (prev) => {
-              let changed = false
-              const map = new Map(prev)
-              prev.forEach((requests, pendingSessionId) => {
-                const nextRequests = requests.filter((request) => request.requestId !== event.requestId)
-                if (nextRequests.length !== requests.length) changed = true
-                if (nextRequests.length === 0) map.delete(pendingSessionId)
-                else map.set(pendingSessionId, nextRequests)
-              })
-              return changed ? map : prev
-            })
+            store.set(allPendingAskUserRequestsAtom, (prev) => resolvePendingInteraction(prev, event.requestId, resolvedAskUserRequestIds))
             store.set(askUserDraftsAtom, (prev) => {
               if (!prev.has(event.requestId)) return prev
               const map = new Map(prev)
@@ -2151,7 +2126,24 @@ export function useGlobalAgentListeners(): void {
     syncVisibleAgentStreamSession()
     const unsubscribeVisibleSession = store.sub(activeSessionIdAtom, syncVisibleAgentStreamSession)
 
+    // 先监听再取快照；所有交互类型都要恢复，迟到响应不能复活已解决请求。
+    void window.electronAPI.getPendingRequests()
+      .then(({ permissions, askUsers, exitPlans }) => {
+        if (disposed) return
+        for (const request of permissions) {
+          store.set(allPendingPermissionRequestsAtom, (prev) => queuePendingInteraction(prev, request, resolvedPermissionRequestIds))
+        }
+        for (const request of askUsers) {
+          store.set(allPendingAskUserRequestsAtom, (prev) => queuePendingInteraction(prev, request, resolvedAskUserRequestIds))
+        }
+        for (const request of exitPlans) {
+          if (queueExitPlanRequest(request) && request.planDocument) openPlanDocumentPreview(request.sessionId, request.planDocument)
+        }
+      })
+      .catch((error) => console.warn('[GlobalAgentListeners] 恢复待处理交互请求失败', error))
+
     return () => {
+      disposed = true
       cleanupEvent()
       streamEventBatcher.dispose()
       unsubscribeVisibleSession()

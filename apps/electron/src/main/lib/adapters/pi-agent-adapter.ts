@@ -975,9 +975,10 @@ function buildPromaProductToolDefinitions(sdk: PiSdk, canUseTool: PiAgentQueryOp
     sdk.defineTool({
       name: 'AskUserQuestion',
       label: '询问用户',
-      description: '当需要用户选择、补充信息或确认偏好时调用，Proma 会展示可交互问答横幅。',
-      promptSnippet: '向用户提出结构化问题并等待回答。',
+      description: '需要用户选择或操作时调用并等待回复。终端需要用户输入、登录或确认时传 terminalId 和一条操作说明，展示接管卡片；用户操作后原 Agent 继续，必须 TerminalRead 核验结果。不能只用文字说在等待用户然后结束。',
+      promptSnippet: '向用户提问并等待回答；需要用户操作终端时绑定 terminalId，挂起直到用户回复，随后读取终端输出核验。',
       parameters: Type.Object({
+        terminalId: Type.Optional(Type.String({ description: '需要用户接管的当前会话终端 ID；传入时 questions 只提供一条操作说明，卡片反馈不写入 stdin。' })),
         questions: Type.Array(Type.Object({
           question: Type.String({ description: '要询问用户的问题。' }),
           header: Type.Optional(Type.String({ description: '简短标题。' })),
@@ -992,7 +993,10 @@ function buildPromaProductToolDefinitions(sdk: PiSdk, canUseTool: PiAgentQueryOp
       }),
       async execute(_toolCallId, params) {
         const input = params as Record<string, unknown>
-        return createJsonToolResult({ answers: input.answers ?? [] })
+        return createJsonToolResult({
+          answers: input.answers ?? [],
+          ...(input.terminalInteraction ? { terminalInteraction: input.terminalInteraction, nextStep: '用户反馈不代表命令成功；继续前使用 TerminalRead 核验终端输出。终端不可用时先核验任务状态，不要盲目重跑。' } : {}),
+        })
       },
     }),
     sdk.defineTool({

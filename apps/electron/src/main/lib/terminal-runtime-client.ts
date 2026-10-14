@@ -44,6 +44,7 @@ export class TerminalRuntimeClient {
   private starting: Promise<void> | undefined
   private generation = 0
   private readonly pendingCreates = new Map<string, PendingCreate>()
+  private readonly activeTerminalIds = new Set<string>()
   private readonly outputListeners = new Set<(event: TerminalOutputEvent) => void>()
   private readonly exitListeners = new Set<(event: TerminalExitEvent) => void>()
 
@@ -91,10 +92,12 @@ export class TerminalRuntimeClient {
   }
 
   kill(terminalId: string): void {
+    this.activeTerminalIds.delete(terminalId)
     this.port?.postMessage({ type: 'terminal.kill', terminalId })
   }
 
   async stop(): Promise<void> {
+    this.activeTerminalIds.clear()
     this.generation++
     const port = this.port
     const runtimeProcess = this.runtimeProcess
@@ -172,6 +175,7 @@ export class TerminalRuntimeClient {
 
   private handleMessage(message: RuntimeMessage): void {
     if (message.type === 'terminal.created') {
+      this.activeTerminalIds.add(message.state.terminalId)
       const pending = this.pendingCreates.get(message.state.terminalId)
       this.pendingCreates.delete(message.state.terminalId)
       pending?.resolve(message.state)
@@ -182,6 +186,7 @@ export class TerminalRuntimeClient {
     } else if (message.type === 'terminal.output') {
       for (const listener of this.outputListeners) listener(message.event)
     } else if (message.type === 'terminal.exit') {
+      this.activeTerminalIds.delete(message.event.terminalId)
       for (const listener of this.exitListeners) listener(message.event)
     }
   }
@@ -196,6 +201,11 @@ export class TerminalRuntimeClient {
     try { runtimeProcess?.kill() } catch { /* utility process may already be exiting */ }
     if (this.runtimeProcess === runtimeProcess) this.runtimeProcess = undefined
     this.rejectPendingCreates(error)
+    const terminalIds = [...this.activeTerminalIds]
+    this.activeTerminalIds.clear()
+    for (const terminalId of terminalIds) {
+      for (const listener of this.exitListeners) listener({ terminalId, exitCode: -1 })
+    }
   }
 
   private rejectPendingCreates(error: Error): void {

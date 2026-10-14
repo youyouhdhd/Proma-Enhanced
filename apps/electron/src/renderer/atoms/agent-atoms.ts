@@ -1048,6 +1048,15 @@ export const pendingPermissionRequestsAtom = atom(
 /** 待处理的 AskUser 请求 Map — 以 sessionId 为 key，切换会话时保留状态 */
 export const allPendingAskUserRequestsAtom = atom<Map<string, readonly AskUserRequest[]>>(new Map())
 
+/** 等待交互仍属于运行中的任务，文案不依赖 token 流或 renderer 的运行快照。 */
+export const agentSessionInteractionLabelAtomFamily = atomFamily((sessionId: string) => atom((get) => {
+  const question = get(allPendingAskUserRequestsAtom).get(sessionId)?.[0]
+  if (question) return question.terminal ? '等待你操作终端' : '等待你的回答'
+  if (get(allPendingPermissionRequestsAtom).get(sessionId)?.length) return '等待权限确认'
+  if (get(allPendingExitPlanRequestsAtom).get(sessionId)?.length) return '等待计划审批'
+  return null
+}))
+
 /** AskUser 单题答案草稿 */
 export interface AskUserQuestionDraft {
   selected: string[]
@@ -1221,6 +1230,12 @@ export const agentSessionIndicatorMapAtom = atom<Map<string, SessionIndicatorSta
   for (const id of unviewedDelegatedCompleted) {
     if (!map.has(id)) {
       map.set(id, 'completed')
+    }
+  }
+
+  for (const requests of [pendingPerms, pendingAskUser, pendingExitPlan]) {
+    for (const [id, pending] of requests) {
+      if (pending.length) map.set(id, 'blocked')
     }
   }
 

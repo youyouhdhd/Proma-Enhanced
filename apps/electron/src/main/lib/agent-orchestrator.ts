@@ -68,6 +68,7 @@ import { permissionService } from './agent-permission-service'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
 import { resolvePlanningDeletionPermission } from './planning-permission-policy'
 import { askUserService } from './agent-ask-user-service'
+import { getOwnedAgentTerminal } from './terminal-service'
 import { exitPlanService, type ExitPlanPermissionResult } from './agent-exit-plan-service'
 import { validateToolInput } from './agent-tool-input-validator'
 import { isSessionPlanMarkdownPath } from './agent-plan-file-policy'
@@ -1410,10 +1411,19 @@ export class AgentOrchestrator {
 
         // AskUserQuestion：始终走交互式问答流程，不受权限模式影响
         if (toolName === 'AskUserQuestion') {
+          const terminalId = input.terminalId
+          if (terminalId !== undefined && typeof terminalId !== 'string') throw new Error('terminalId 必须是字符串')
+          const terminal = typeof terminalId === 'string' ? getOwnedAgentTerminal(sessionId, terminalId) : undefined
+          if (terminal && terminal.status !== 'running') throw new Error('终端已退出，无法请求用户接管')
           return askUserService.handleAskUserQuestion(
             sessionId, input, options.signal,
             (request: AskUserRequest) => {
               this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_request', request } })
+            },
+            terminal ? { terminalId: terminal.terminalId, title: terminal.title } : undefined,
+            (requestId) => {
+              // abort/终端退出也必须移除 renderer 的未决卡片。
+              this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'ask_user_resolved', requestId } })
             },
           )
         }

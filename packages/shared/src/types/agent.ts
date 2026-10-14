@@ -1828,6 +1828,8 @@ export interface AskUserRequest {
   questions: AskUserQuestion[]
   /** 工具原始输入（用于构建 updatedInput） */
   toolInput: Record<string, unknown>
+  /** 由主进程验证归属的终端接管目标；卡片回复不写入 stdin。 */
+  terminal?: { terminalId: string; title: string }
 }
 
 /** AskUser 响应（渲染进程 → 主进程） */
@@ -1836,6 +1838,8 @@ export interface AskUserResponse {
   requestId: string
   /** 用户答案（问题文本 → 答案文本，与 SDK 约定一致） */
   answers: Record<string, string>
+  /** 用户的操作声明，Agent 续跑后仍须核验终端输出。 */
+  terminalResponse?: { outcome: 'completed' | 'problem'; message?: string }
 }
 
 // ===== ExitPlanMode 计划审批类型 =====

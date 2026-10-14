@@ -24,6 +24,7 @@ import {
 import { resolveAgentTerminalCwd } from './terminal-agent-policy'
 import { requireTerminalCwd, resolveTerminalCwd } from './terminal-cwd'
 import { terminalRuntimeClient } from './terminal-runtime-client'
+import { askUserService } from './agent-ask-user-service'
 
 const terminals = new Map<string, TerminalState>()
 const pendingTerminals = new Map<string, Promise<TerminalState>>()
@@ -50,10 +51,13 @@ function initialize(): void {
   terminalRuntimeClient.onOutput((event) => {
     if (!terminals.has(event.terminalId) && !pendingTerminals.has(event.terminalId)) return
     appendOutputBuffer(event)
+    // 主进程缓冲接管流量确认，隐藏/卸载的终端视图不能阻塞输出和 exit。
+    terminalRuntimeClient.acknowledgeOutput({ terminalId: event.terminalId, sequence: event.sequence })
     getMainWindow()?.webContents.send(TERMINAL_IPC_CHANNELS.OUTPUT, event)
   })
   terminalRuntimeClient.onExit((event) => {
     terminals.delete(event.terminalId)
+    askUserService.resolveTerminalUnavailable(event.terminalId)
     const agentTerminal = agentTerminals.get(event.terminalId)
     if (agentTerminal) {
       // Agent 可在命令退出后读取结果；缓冲会随显式关闭或会话回收一并释放。
@@ -129,6 +133,7 @@ export async function resizeTerminal(input: TerminalResizeInput): Promise<void> 
 
 export function killTerminal(terminalId: string): void {
   validateTerminalId(terminalId)
+  askUserService.resolveTerminalUnavailable(terminalId)
   if (pendingTerminals.has(terminalId)) cancelledPendingTerminalIds.add(terminalId)
   terminals.delete(terminalId)
   terminalSessionOwners.delete(terminalId)
@@ -258,6 +263,7 @@ export function acknowledgeTerminalOutput(input: TerminalOutputAck): void {
 }
 
 export async function stopAllTerminals(): Promise<void> {
+  for (const terminalId of agentTerminals.keys()) askUserService.resolveTerminalUnavailable(terminalId)
   terminals.clear()
   pendingTerminals.clear()
   cancelledPendingTerminalIds.clear()
@@ -278,7 +284,7 @@ function notifyAgentTerminalOpen(record: AgentTerminalRecord): void {
   getMainWindow()?.webContents.send(TERMINAL_IPC_CHANNELS.AGENT_OPEN, event)
 }
 
-function getOwnedAgentTerminal(sessionId: string, terminalId: string): AgentTerminalRecord {
+export function getOwnedAgentTerminal(sessionId: string, terminalId: string): AgentTerminalRecord {
   validateTerminalId(terminalId)
   const record = agentTerminals.get(terminalId)
   if (!record || record.sessionId !== sessionId) throw new Error('终端不存在或不属于当前 Agent 会话')

@@ -4131,15 +4131,15 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.ASK_USER_RESPOND,
     async (event, response: AskUserResponse): Promise<void> => {
-      const { requestId, answers } = response
-      const sessionId = askUserService.respondToAskUser(requestId, answers)
+      if (!response || typeof response.requestId !== 'string') throw new Error('问答请求无效')
+      const { requestId, answers, terminalResponse } = response
+      const sessionId = askUserService.respondToAskUser(requestId, answers, terminalResponse)
+      if (!sessionId) throw new Error('该交互已结束，请刷新会话状态')
 
-      if (sessionId) {
-        event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
-          sessionId,
-          payload: { kind: 'proma_event', event: { type: 'ask_user_resolved', requestId } },
-        })
-      }
+      event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+        sessionId,
+        payload: { kind: 'proma_event', event: { type: 'ask_user_resolved', requestId } },
+      })
     }
   )
 

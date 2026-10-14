@@ -2,7 +2,7 @@
 
 An enhanced fork of [official Proma](https://github.com/proma-ai/Proma). It keeps Proma's local-first desktop Agent foundation and independently maintains extensions for multi-project work, ChatGPT connectivity, and Agent usability. **Since v1.0.0, this fork has had its own versions, installers, and update source.**
 
-[Download the latest fork release](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.3 release notes](./release-notes/v1.17.3.md) · [中文](./README.md) · [Fork maintenance and upstream sync](./docs/fork-maintenance.md)
+[Download the latest fork release](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.4 release notes](./release-notes/v1.17.4.md) · [中文](./README.md) · [Fork maintenance and upstream sync](./docs/fork-maintenance.md)
 
 ## What this fork adds
 
@@ -18,7 +18,7 @@ Download Windows, macOS Apple Silicon/Intel, or Linux builds from [this fork's R
 
 ![Proma Poster](https://img.erlich.fun/personal-blog/uPic/pb.png)
 
-v1.17.3 fixes custom channel models silently clamping xhigh/max reasoning levels to high, and adds per-model context window overrides plus drag-to-reorder reasoning levels. See the [release notes](./release-notes/v1.17.3.md).
+v1.17.4 adds terminal handoff cards: complete input, sign-in, or confirmation in the original terminal, then resume the Agent to verify the output. It also fixes pending interaction recovery and output collection when the terminal view is hidden. See the [release notes](./release-notes/v1.17.4.md).
 
 ## About upstream Proma
 

@@ -30,7 +30,6 @@ type RuntimeRequest = AgentRuntimeRequest & { payload?: Record<string, unknown> 
 type PendingParentRequest = {
   resolve: (value: unknown) => void
   reject: (reason: unknown) => void
-  timer: ReturnType<typeof setTimeout>
   cleanup: () => void
 }
 type ActiveQuery = {
@@ -335,7 +334,7 @@ function requestParent<Result = unknown>(
       clearTimeout(timer)
       removeAbortListener()
     }
-    const timer = setTimeout(() => {
+    const timer = timeoutMs === null ? undefined : setTimeout(() => {
       if (!parentRequests.delete(request.requestId)) return
       cleanup()
       port.postMessage(createAgentRuntimeRequest(
@@ -349,7 +348,6 @@ function requestParent<Result = unknown>(
     parentRequests.set(request.requestId, {
       resolve: (value) => resolve(value as Result),
       reject,
-      timer,
       cleanup,
     })
     if (signal) {

@@ -28,6 +28,7 @@ import {
   type AskUserRequestDraft,
 } from '@/atoms/agent-atoms'
 import type { AskUserQuestion } from '@proma/shared'
+import { TerminalHandoffCard } from './TerminalHandoffCard'
 
 const EMPTY_ANSWER: AskUserQuestionDraft = { selected: [], customText: '', showCustom: false }
 
@@ -82,7 +83,7 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
 
   React.useEffect(() => {
     clearAutoAdvanceTimer()
-    if (!request || questions.length === 0) return
+    if (!request || request.terminal || questions.length === 0) return
     setDrafts((prev) => {
       const current = prev.get(request.requestId)
       if (current && current.activeTab >= 0 && current.activeTab < questions.length) return prev
@@ -94,7 +95,7 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
 
   // 键盘导航：只在 requestId 变化时重建 handler，内部通过 ref 读取最新值
   React.useEffect(() => {
-    if (!request || questions.length === 0) return
+    if (!request || request.terminal || questions.length === 0) return
 
     const handleKeyDown = (e: KeyboardEvent): void => {
       const curTab = activeTabRef.current
@@ -166,6 +167,7 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
   }
 
   if (!request) return null
+  if (request.terminal) return <TerminalHandoffCard key={request.requestId} request={request} onCancel={handleDismiss} />
 
   const getAnswer = (idx: number): AskUserQuestionDraft => answers.get(idx) ?? EMPTY_ANSWER
 
