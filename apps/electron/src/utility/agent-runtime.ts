@@ -322,7 +322,7 @@ function requestParent<Result = unknown>(
 ): Promise<Result> {
   const port = runtimePort
   if (!port) return Promise.reject(new Error('Agent runtime port is not connected'))
-  const timeoutMs = getParentRequestTimeoutMs(method, payload)
+  const timeoutMs = getParentRequestTimeoutMs(method)
   const request = createAgentRuntimeRequest(method, payload, {
     sessionId: activeQuery?.sessionId,
     queryId: activeQuery?.queryId,

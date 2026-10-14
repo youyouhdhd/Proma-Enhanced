@@ -122,6 +122,7 @@ export function PermissionBanner({ sessionId }: PermissionBannerProps): React.Re
     <div
       className="mx-4 mb-3 rounded-xl bg-card shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200"
     >
+      <p className="px-3 pt-3 text-xs text-muted-foreground">等待你的回复，不会自动超时。停止任务或退出应用会结束当前等待。</p>
       {/* 头部 */}
       <div className="flex items-center justify-between px-3 py-2">
         <div className="flex items-center gap-2">

@@ -4,6 +4,8 @@ import { Provider, createStore } from 'jotai'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { AskUserRequest } from '@proma/shared'
 import { AskUserBanner } from './AskUserBanner'
+import { PermissionBanner } from './PermissionBanner'
+import { ExitPlanModeBanner } from './ExitPlanModeBanner'
 import {
   allPendingAskUserRequestsAtom,
   allPendingPermissionRequestsAtom,
@@ -26,6 +28,7 @@ describe('终端接管组件与状态', () => {
     store.set(allPendingAskUserRequestsAtom, new Map([[request.sessionId, [request]]]))
     const markup = renderToStaticMarkup(<Provider store={store}><AskUserBanner sessionId={request.sessionId} /></Provider>)
     expect(markup).toContain('等待你操作终端')
+    expect(markup).toContain('等待你的回复，不会自动超时')
     expect(markup).toContain('打开终端')
     expect(markup).toContain('已完成，继续')
     expect(markup).toContain('遇到问题')
@@ -56,6 +59,7 @@ describe('终端接管组件与状态', () => {
     store.set(allPendingAskUserRequestsAtom, new Map([[request.sessionId, [{ ...request, terminal: undefined }]]]))
     const markup = renderToStaticMarkup(<Provider store={store}><AskUserBanner sessionId={request.sessionId} /></Provider>)
     expect(markup).toContain('Proma Agent 需要你的输入')
+    expect(markup).toContain('等待你的回复，不会自动超时')
     expect(markup).not.toContain('打开终端')
     expect(store.get(agentSessionInteractionLabelAtomFamily(request.sessionId))).toBe('等待你的回答')
     store.set(allPendingAskUserRequestsAtom, new Map())
@@ -66,5 +70,16 @@ describe('终端接管组件与状态', () => {
     store.set(allPendingPermissionRequestsAtom, new Map())
     store.set(allPendingExitPlanRequestsAtom, new Map([[request.sessionId, [{ requestId: 'plan', sessionId: request.sessionId, toolInput: {}, allowedPrompts: [] }]]]))
     expect(store.get(agentSessionInteractionLabelAtomFamily(request.sessionId))).toBe('等待计划审批')
+  })
+
+  test('Given 权限确认与计划审批 When 显示横幅 Then 清楚说明等待策略与结束条件', () => {
+    const store = createStore()
+    store.set(allPendingPermissionRequestsAtom, new Map([[request.sessionId, [{ requestId: 'permission', sessionId: request.sessionId, toolName: 'Bash', toolInput: {}, description: '执行命令', dangerLevel: 'normal' }]]]))
+    store.set(allPendingExitPlanRequestsAtom, new Map([[request.sessionId, [{ requestId: 'plan', sessionId: request.sessionId, toolInput: {}, allowedPrompts: [] }]]]))
+    for (const component of [<PermissionBanner sessionId={request.sessionId} />, <ExitPlanModeBanner sessionId={request.sessionId} />]) {
+      const markup = renderToStaticMarkup(<Provider store={store}>{component}</Provider>)
+      expect(markup).toContain('等待你的回复，不会自动超时')
+      expect(markup).toContain('停止任务或退出应用会结束当前等待')
+    }
   })
 })

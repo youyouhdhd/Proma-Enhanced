@@ -70,6 +70,7 @@ export class AgentExitPlanService {
     sendToRenderer: (request: ExitPlanModeRequest) => void,
     options?: { planDirectory?: string },
   ): Promise<ExitPlanPermissionResult> {
+    if (signal.aborted) return Promise.resolve({ behavior: 'deny', message: '操作已中止' })
     console.log(`[ExitPlanService] handleExitPlanMode 开始: sessionId=${sessionId}, signal.aborted=${signal.aborted}`)
     const allowedPrompts = this.parseAllowedPrompts(input)
     const planDocument = this.resolvePlanDocument(input.planFile, options?.planDirectory)
@@ -88,8 +89,6 @@ export class AgentExitPlanService {
       planDocument,
     }
 
-    sendToRenderer(request)
-
     return new Promise<ExitPlanPermissionResult>((resolve) => {
       this.pendingRequests.set(request.requestId, {
         resolve,
@@ -105,6 +104,7 @@ export class AgentExitPlanService {
           resolve({ behavior: 'deny', message: '操作已中止' })
         }
       }, { once: true })
+      sendToRenderer(request)
     })
   }
 

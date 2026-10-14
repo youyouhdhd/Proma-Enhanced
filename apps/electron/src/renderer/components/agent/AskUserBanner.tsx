@@ -300,6 +300,8 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
           </div>
         </div>
 
+        <p className="mb-2 text-xs text-muted-foreground">等待你的回复，不会自动超时。停止任务或退出应用会结束当前等待。</p>
+
         {/* Tab 栏（多问题时显示） */}
         {questions.length > 1 && (
           <div className="flex gap-1">

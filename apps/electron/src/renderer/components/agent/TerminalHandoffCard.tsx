@@ -85,6 +85,7 @@ export function TerminalHandoffCard({ request, onCancel }: TerminalHandoffCardPr
       </div>
       <p className="mt-2 whitespace-pre-wrap break-words text-sm text-foreground">{request.questions[0]?.question}</p>
       <p className="mt-1 text-xs text-muted-foreground">{terminal.title} · 请在终端中输入，密码不要填写到这里。</p>
+      <p className="mt-1 text-xs text-muted-foreground">等待你的回复，不会自动超时。停止任务或退出应用会结束当前等待。</p>
       <Button variant="outline" size="sm" className="mt-3" onClick={openTerminal}>打开终端</Button>
       <label className="mt-3 block text-xs text-muted-foreground" htmlFor={`terminal-feedback-${request.requestId}`}>操作反馈（可选）</label>
       <textarea

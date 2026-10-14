@@ -124,6 +124,7 @@ export class AgentPermissionService {
     sendAskUserToRenderer?: (request: AskUserRequest) => void,
   ): (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions) => Promise<PermissionResult> {
     return async (toolName, input, options) => {
+      if (options.signal.aborted) return { behavior: 'deny', message: '操作已中止' }
       // AskUserQuestion 拦截：委托给交互式问答服务
       if (toolName === 'AskUserQuestion' && askUserHandler && sendAskUserToRenderer) {
         return askUserHandler(sessionId, input, options.signal, sendAskUserToRenderer)
@@ -146,8 +147,6 @@ export class AgentPermissionService {
 
       // 需要询问用户：构建请求并发送到 UI
       const request = this.buildPermissionRequest(sessionId, toolName, input, options)
-      sendToRenderer(request)
-
       return new Promise<PermissionResult>((resolve) => {
         this.pendingPermissions.set(request.requestId, { resolve, request })
 
@@ -158,6 +157,7 @@ export class AgentPermissionService {
             resolve({ behavior: 'deny' as const, message: '操作已中止' })
           }
         }, { once: true })
+        sendToRenderer(request)
       })
     }
   }
@@ -173,12 +173,12 @@ export class AgentPermissionService {
     options: CanUseToolOptions,
     sendToRenderer: (request: PermissionRequest) => void,
   ): Promise<PermissionResult> {
+    if (options.signal.aborted) return Promise.resolve({ behavior: 'deny', message: '操作已中止' })
     const request: PermissionRequest = {
       ...this.buildPermissionRequest(sessionId, toolName, input, options),
       dangerLevel: 'dangerous',
       allowAlways: false,
     }
-    sendToRenderer(request)
     return new Promise<PermissionResult>((resolve) => {
       this.pendingPermissions.set(request.requestId, { resolve, request })
       options.signal.addEventListener('abort', () => {
@@ -186,6 +186,7 @@ export class AgentPermissionService {
         this.pendingPermissions.delete(request.requestId)
         resolve({ behavior: 'deny' as const, message: '操作已中止' })
       }, { once: true })
+      sendToRenderer(request)
     })
   }
 
