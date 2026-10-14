@@ -251,6 +251,7 @@ export interface SDKAssistantMessage {
     }
     model?: string
     stop_reason?: string
+    content_format?: 'structured' | 'legacy_think_tags'
   }
   parent_tool_use_id: string | null
   session_id?: string
@@ -302,6 +303,12 @@ export interface SkillActivation {
   sources: SkillActivationSource[]
 }
 
+export interface AgentFinalAnswerInfo {
+  status: 'present' | 'missing' | 'not_required'
+  recoveryAttempted: boolean
+  reason?: 'thinking_only' | 'tool_only' | 'empty' | 'unexpected_tool_call' | 'recovery_error' | 'output_invalid'
+}
+
 /** SDK result 消息（查询结束时返回） */
 export interface SDKResultMessage {
   type: 'result'
@@ -316,6 +323,7 @@ export interface SDKResultMessage {
   modelUsage?: Record<string, { contextWindow?: number }>
   errors?: string[]
   terminal_reason?: string
+  final_answer?: AgentFinalAnswerInfo
   /** Pi 手动压缩用于收束流的内部 result，不代表真实模型 usage */
   isSyntheticCompactionResult?: boolean
   background_tasks?: SDKBackgroundTaskSummary[]
@@ -670,7 +678,7 @@ export type PromaEvent =
   /** 普通桌面会话已开始执行；startedAt 用于展示，runGeneration 是主进程单调递增的可靠代际。 */
   | { type: 'run_started'; startedAt: number; runGeneration?: number }
   /** 普通桌面会话已结束；供已显式配置的外部通知通道发送摘要。 */
-  | { type: 'run_completed'; source: AgentExternalRunSource | 'desktop'; stoppedByUser: boolean; startedAt?: number; runGeneration?: number }
+  | { type: 'run_completed'; source: AgentExternalRunSource | 'desktop'; stoppedByUser: boolean; startedAt?: number; runGeneration?: number; resultSubtype?: string; final_answer?: AgentFinalAnswerInfo }
   | { type: 'run_resumed'; sessionId: string }
   /** 用户主动停止当前执行；startedAt 防止旧运行的终态覆盖新一轮执行。 */
   | { type: 'run_stopped'; startedAt?: number; runGeneration?: number }
@@ -1667,6 +1675,7 @@ export interface AgentStreamCompletePayload {
   resultSubtype?: string
   /** SDK result 消息携带的错误详情（error_during_execution 等场景下的真实错误原因，用于展示具体错误） */
   resultErrors?: string[]
+  final_answer?: AgentFinalAnswerInfo
   /** 本轮主体结束但仍有后台任务/定时任务在飞行：UI 进入"空闲可输入"态，等待任务完成自动唤醒 */
   backgroundTasksPending?: boolean
   /** 完成时的最新会话元数据，供 renderer 增量更新列表，避免重新传输全量会话索引。 */

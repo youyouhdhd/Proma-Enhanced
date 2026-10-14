@@ -48,6 +48,7 @@ import { getAgentSessionMeta, markAgentSessionDeleting, updateAgentSessionMeta }
 import { setAgentStopper, setHeadlessAgentRunner } from './agent-headless-runner-registry'
 import { getHeadlessAgentRunTarget } from './agent-headless-run-target'
 import { sendAgentStreamComplete } from './agent-completion-payload'
+import type { AgentStreamCompletionDetails } from './agent-completion-payload'
 import { AgentStreamForwarder } from './agent-stream-forwarder'
 import { AgentStreamRouteRegistry } from './agent-stream-route-registry'
 import { AgentQueueCoordinator } from './agent-queue-coordinator'
@@ -317,6 +318,8 @@ export async function runAgent(
             type: 'run_completed',
             source: 'desktop',
             stoppedByUser: opts?.stoppedByUser ?? false,
+            resultSubtype: opts?.resultSubtype,
+            final_answer: opts?.final_answer,
             ...(opts?.startedAt != null ? { startedAt: opts.startedAt } : {}),
             ...(opts?.runGeneration != null ? { runGeneration: opts.runGeneration } : {}),
           },
@@ -330,6 +333,7 @@ export async function runAgent(
             runGeneration: opts?.runGeneration,
             resultSubtype: opts?.resultSubtype,
             resultErrors: opts?.resultErrors,
+            final_answer: opts?.final_answer,
             backgroundTasksPending: opts?.backgroundTasksPending,
             // 只读取刚完成的轻量 meta，renderer 可据此增量更新列表，避免再取 5,000+ 条全量会话。
             session: getSessionMetaForRenderer(input.sessionId),
@@ -397,7 +401,7 @@ export async function runAgentHeadless(
   input: AgentSendInput,
   callbacks: {
     onError: (error: string) => void
-    onComplete: (messages?: AgentMessage[], outcome?: { stoppedByUser?: boolean }) => void
+    onComplete: (messages?: AgentMessage[], outcome?: AgentStreamCompletionDetails) => void
     onTitleUpdated: (title: string) => void
     source?: AgentExternalRunSource
     originSessionId?: string
@@ -440,7 +444,7 @@ export async function runAgentHeadless(
         }
       },
       onComplete: (messages, opts) => {
-        callbacks.onComplete(messages, { stoppedByUser: opts?.stoppedByUser })
+        callbacks.onComplete(messages, opts)
         publishRunStopped(runInput.sessionId, opts?.stoppedByUser, opts?.startedAt, opts?.runGeneration)
         eventBus.emit(runInput.sessionId, {
           kind: 'proma_event',
@@ -448,6 +452,8 @@ export async function runAgentHeadless(
             type: 'run_completed',
             source: callbacks.source ?? 'bridge',
             stoppedByUser: opts?.stoppedByUser ?? false,
+            resultSubtype: opts?.resultSubtype,
+            final_answer: opts?.final_answer,
             ...(opts?.startedAt != null ? { startedAt: opts.startedAt } : {}),
             ...(opts?.runGeneration != null ? { runGeneration: opts.runGeneration } : {}),
           },
@@ -463,6 +469,7 @@ export async function runAgentHeadless(
             runGeneration: opts?.runGeneration,
             resultSubtype: opts?.resultSubtype,
             resultErrors: opts?.resultErrors,
+            final_answer: opts?.final_answer,
             backgroundTasksPending: opts?.backgroundTasksPending,
             // 只读取刚完成的轻量 meta，renderer 可据此增量更新列表，避免再取 5,000+ 条全量会话。
             session: getSessionMetaForRenderer(runInput.sessionId),
@@ -515,10 +522,10 @@ export async function runAgentHeadless(
     console.error('[Agent 服务] runAgentHeadless 未处理异常:', extensions?.analysisTools || extensions?.actionTools ? '远程 Agent 任务失败' : err)
     const errorMessage = err instanceof Error ? err.message : '未知错误'
     callbacks.onError(errorMessage)
-    callbacks.onComplete()
+    callbacks.onComplete(undefined, { resultSubtype: 'error_during_execution', resultErrors: [errorMessage] })
     eventBus.emit(runInput.sessionId, {
       kind: 'proma_event',
-      event: { type: 'run_completed', source: callbacks.source ?? 'bridge', stoppedByUser: false, startedAt },
+      event: { type: 'run_completed', source: callbacks.source ?? 'bridge', stoppedByUser: false, startedAt, resultSubtype: 'error_during_execution' },
     })
     const target = route
       ? streamRoutes.getTargetIfOwner(runInput.sessionId, route.ownerId)
@@ -533,6 +540,8 @@ export async function runAgentHeadless(
         messages: [],
         stoppedByUser: false,
         startedAt,
+        resultSubtype: 'error_during_execution',
+        resultErrors: [errorMessage],
         runGeneration: runInput.runGeneration,
       })
     }

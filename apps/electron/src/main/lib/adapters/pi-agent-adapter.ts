@@ -22,6 +22,7 @@ import type {
   ProviderType,
   SendQueuedMessageOptions,
   SDKMessage,
+  SDKResultMessage,
   AgentAssistantDelta,
   AgentToolCallDelta,
   SDKUserMessageInput,
@@ -46,7 +47,7 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import type { Transport as PiAgentTransport } from '@earendil-works/pi-ai'
 import type { AssistantMessageEvent } from '@earendil-works/pi-ai'
-import type { AgentToolResult, AgentToolUpdateCallback } from '@earendil-works/pi-agent-core'
+import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage } from '@earendil-works/pi-ai/compat'
 import { Type, type TSchema } from 'typebox'
 import {
@@ -83,6 +84,8 @@ import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
 import { PendingPromptSkillActivationTracker } from './pi-skill-activation-tracker'
 import { normalizePiToolResultDetails, serializePiToolResultPayload } from './pi-tool-result-json'
 import { createPiRetryTerminalGate, mapPiNativeRetryEvent } from './pi-retry-control'
+import { inspectFinalAnswer, MISSING_FINAL_ANSWER_MESSAGE } from '@proma/session-core'
+import { recoverFinalAnswer } from './pi-final-answer-recovery'
 import {
   closePiRequestProxyDispatcher,
   createPiRequestProxyDispatcher,
@@ -197,6 +200,7 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
 }
 
 interface ActivePiSession {
+  finalizationController?: AbortController
   session?: AgentSession
   resourceLoader?: ResourceLoader
   ready: Promise<AgentSession>
@@ -1404,6 +1408,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     let requestProxyDispatcher: Dispatcher | undefined
 
     const cleanupActiveSession = (): void => {
+      active.finalizationController?.abort()
       try {
         unsubscribe?.()
         unsubscribe = undefined
@@ -1452,6 +1457,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       let pendingCompactionContinuation: string | undefined
       let automaticCompactionContinuations = 0
       let pendingTerminalResult: SDKMessage | undefined
+      let terminalMessages: AgentMessage[] = []
       /** 当前压缩是否紧随一个成功完成的主 Agent turn。 */
       let completedAgentTurnPendingCompaction = false
       const customTools = selectPiToolCatalog(input.exclusiveCustomTools, () => wrapCustomToolDefinitions(input.customTools, input.canUseTool), () => [
@@ -1493,7 +1499,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           transport: inferReasoningTransport(input.provider),
         })
         : undefined
-      const deepSeekReasoningProfile = input.provider === 'deepseek'
+      const deepSeekReasoningProfile = model.api === 'anthropic-messages'
         ? resolveReasoningProfile({
           modelId: input.model,
           transport: 'anthropic-messages',
@@ -1761,6 +1767,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 runtimeGuard.getResultOverride(event.messages),
               )
               pendingTerminalResult = terminalResult
+              terminalMessages = event.messages
               completedAgentTurnPendingCompaction = shouldMarkCompactionAfterCompletedTurn(
                 terminalResult,
                 compactContextRequested,
@@ -1967,7 +1974,45 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 pendingNativeOverflowRecovery = false
                 pendingTerminalResult = undefined
               } else if (pendingTerminalResult) {
-                queue.push(pendingTerminalResult)
+                if (!pendingCompactionContinuation && active.pendingInterruptPrompts.length === 0 && pendingTerminalResult.type === 'result' && pendingTerminalResult.subtype === 'success' && !(pendingTerminalResult as SDKResultMessage).background_tasks?.some(task => task.status === 'running' || task.status === 'pending')) {
+                  let info = inspectFinalAnswer(terminalMessages.flatMap(message => {
+                    const converted = convertPiMessage(message, session.sessionId)
+                    return converted ? [converted] : []
+                  }))
+                  if (info.status === 'missing' && !runtimeGuard.shouldStopBeforeNextTurn()) {
+                    const controller = new AbortController()
+                    active.finalizationController = controller
+                    queue.push({ type: 'system', subtype: 'finalizing', session_id: session.sessionId, message: '正在整理最终答复，最多等待 60 秒…' })
+                    try {
+                      const recovered = await recoverFinalAnswer(session, controller)
+                      info = recovered.info
+                      if (recovered.usageMessage && !active.abortRequested && !active.interrupting) {
+                        runtimeGuard.recordMessage(recovered.usageMessage)
+                        terminalMessages = [...terminalMessages, recovered.usageMessage]
+                        pendingTerminalResult = convertResultMessage(terminalMessages, session.sessionId, runtimeGuard.getResultOverride(terminalMessages))
+                      }
+                      if (recovered.message && !active.abortRequested && !active.interrupting && !active.disposed) {
+                        sessionManager.appendMessage(recovered.message)
+                        session.agent.state.messages = [...session.agent.state.messages, recovered.message]
+                        const uuid = randomUUID()
+                        finalAssistantUuids.set(recovered.message, uuid)
+                        const converted = convertPiMessage(recovered.message, session.sessionId, input.model, { uuid })
+                        if (converted) queue.push(converted)
+                        persistPiEntryBindings()
+                      }
+                    } finally { active.finalizationController = undefined }
+                  }
+                  const result = pendingTerminalResult as SDKResultMessage
+                  result.final_answer = info
+                  if (result.subtype === 'success' && info.status === 'missing') {
+                    result.subtype = 'error_during_execution'
+                    result.terminal_reason = 'missing_final_answer'
+                    result.errors = [MISSING_FINAL_ANSWER_MESSAGE]
+                  }
+                }
+                if (!active.abortRequested && !active.interrupting && !pendingCompactionContinuation && active.pendingInterruptPrompts.length === 0) {
+                  queue.push(pendingTerminalResult)
+                }
                 pendingTerminalResult = undefined
               }
             } finally {
@@ -2020,6 +2065,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     const active = this.activeSessions.get(sessionId)
     if (!active) return
     active.abortRequested = true
+    active.finalizationController?.abort()
     rejectPendingInterruptPrompts(active, createAbortError())
     if (!active.session) rejectActiveReady(active, createAbortError())
     active.session?.abortCompaction()
@@ -2061,7 +2107,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       const stopOverride = active.runtimeGuard.getLimitResultOverride()
       throw new Error(stopOverride?.errors[0] ?? 'Agent 已达到运行限制，无法继续追加消息')
     }
-    if (options?.interrupt) {
+    if (options?.interrupt || active.finalizationController) {
       const accepted = new Promise<void>((resolve, reject) => {
         active.pendingInterruptPrompts.push({
           content,
@@ -2071,6 +2117,10 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         })
       })
       accepted.catch(() => {})
+      if (active.finalizationController) {
+        active.interrupting = true
+        active.finalizationController.abort()
+      }
       if (session.isStreaming) {
         // Pi 没有单独的 interrupt()；公开取消 API 是 abort()。
         // 这里把 abort 产生的内部 aborted 终态压住，再由 query 的 prompt chain 发送新消息。
@@ -2082,7 +2132,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         await active.interruptAbortPromise
       }
       await accepted
-      options.onAccepted?.()
+      options?.onAccepted?.()
       return
     }
     try {

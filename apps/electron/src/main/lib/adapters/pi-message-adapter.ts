@@ -267,6 +267,7 @@ export function convertPiMessage(
         usage: usageFromAssistant(assistant),
         model: assistant.model,
         stop_reason: assistant.stopReason,
+        content_format: 'structured',
       },
       parent_tool_use_id: null,
       session_id: sessionId,

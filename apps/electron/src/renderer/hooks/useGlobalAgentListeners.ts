@@ -246,7 +246,7 @@ function applyAssistantDeltasToPreview(
 function createAssistantDeltaPreview(payload: AgentAssistantDeltaPayload, metadata: Partial<SDKAssistantMessage>): SDKAssistantMessage {
   return {
     type: 'assistant',
-    message: { content: [] },
+    message: { content: [], content_format: 'structured' },
     parent_tool_use_id: null,
     session_id: payload.session_id,
     uuid: payload.uuid,

@@ -9,6 +9,8 @@
 import type { SDKAssistantMessage, SDKContentBlock, SDKToolUseBlock } from '@proma/shared'
 import { type MessageGroup, extractUserText, getGroupPreview, stripScheduledRunMarker } from './group'
 import { estimateTokens } from './tokens'
+import { getTurnFinalAnswer, MISSING_FINAL_ANSWER_MESSAGE } from './final-answer'
+import { normalizeThinkTagsInContentBlocks } from './thinking-tags'
 
 export type TurnRole = 'user' | 'assistant' | 'system'
 
@@ -79,7 +81,7 @@ function buildAssistantContent(messages: SDKAssistantMessage[]): { text: string;
   for (const m of dedupSnapshotsByMessageId(messages)) {
     const blocks = m.message?.content
     if (!Array.isArray(blocks)) continue
-    for (const block of blocks as SDKContentBlock[]) {
+    for (const block of normalizeThinkTagsInContentBlocks(blocks as SDKContentBlock[], { contentFormat: m.message.content_format })) {
       if (block.type === 'text' && 'text' in block) {
         const t = (block as { text: string }).text.trim()
         if (t) texts.push(t)
@@ -125,7 +127,10 @@ export function toTranscript(groups: MessageGroup[]): TranscriptTurn[] {
         tokens: estimateTokens(preview),
       }
     }
-    const { text, toolSummaries } = buildAssistantContent(group.assistantMessages)
+    const content = buildAssistantContent(group.assistantMessages)
+    const text = getTurnFinalAnswer(group.turnMessages).status === 'missing'
+      ? [content.text, MISSING_FINAL_ANSWER_MESSAGE].filter(Boolean).join('\n\n') : content.text
+    const { toolSummaries } = content
     return {
       index,
       role: 'assistant' as const,

@@ -9,6 +9,7 @@ import {
   renderTranscriptMarkdown,
   collapseToolSummaries,
   summarizeToolInput,
+  MISSING_FINAL_ANSWER_MESSAGE,
 } from './index'
 
 /** 把对象数组序列化为 JSONL（每行一个 JSON）。 */
@@ -36,7 +37,7 @@ describe('快照去重（格式 B）', () => {
 
   test('assistant 只取最完整快照，无拼接重复', () => {
     const a = turns[1]!
-    expect(a.text).toBe('Hello world')
+    expect(a.text).toBe(`Hello world\n\n${MISSING_FINAL_ANSWER_MESSAGE}`)
     expect(a.text).not.toContain('Hel\n')
   })
 
@@ -170,7 +171,7 @@ describe('旧扁平格式（格式 A）归一', () => {
 
   test('role 字段被识别并转换为 SDKMessage', () => {
     expect(turns[0]).toMatchObject({ role: 'user', text: '你好' })
-    expect(turns[1]).toMatchObject({ role: 'assistant', text: '旧版回复' })
+    expect(turns[1]).toMatchObject({ role: 'assistant', text: `旧版回复\n\n${MISSING_FINAL_ANSWER_MESSAGE}` })
   })
 })
 

@@ -2,7 +2,7 @@
 
 An enhanced fork of [official Proma](https://github.com/proma-ai/Proma). It keeps Proma's local-first desktop Agent foundation and independently maintains extensions for multi-project work, ChatGPT connectivity, and Agent usability. **Since v1.0.0, this fork has had its own versions, installers, and update source.**
 
-[Download the latest fork release](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.5 release notes](./release-notes/v1.17.5.md) · [中文](./README.md) · [Fork maintenance and upstream sync](./docs/fork-maintenance.md)
+[Download the latest fork release](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.6 release notes](./release-notes/v1.17.6.md) · [中文](./README.md) · [Fork maintenance and upstream sync](./docs/fork-maintenance.md)
 
 ## What this fork adds
 
@@ -18,7 +18,7 @@ Download Windows, macOS Apple Silicon/Intel, or Linux builds from [this fork's R
 
 ![Proma Poster](https://img.erlich.fun/personal-blog/uPic/pb.png)
 
-v1.17.5 keeps local questions, terminal handoffs, permission requests, and plan reviews waiting until you respond or stop the task. Cards explain this policy; execution and connection timeouts remain in place. See the [release notes](./release-notes/v1.17.5.md).
+v1.17.6 checks final answers and attempts one tool-free recovery when text is missing. Unresolved turns show a persistent notice and fail explicitly. It also fixes V4.1 reasoning parameters, Ark thinking replay, SSE validation, and literal thinking tags in native text. See the [release notes](./release-notes/v1.17.6.md).
 
 ## About upstream Proma
 

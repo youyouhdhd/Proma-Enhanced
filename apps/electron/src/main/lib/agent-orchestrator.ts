@@ -15,6 +15,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { inspectFinalAnswer, MISSING_FINAL_ANSWER_MESSAGE } from '@proma/session-core'
+import type { AgentFinalAnswerInfo, SDKResultMessage } from '@proma/shared'
 import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -101,7 +103,7 @@ export interface SessionCallbacks {
   /** 发送流式错误 */
   onError: (error: string, opts?: { runGeneration?: number }) => void
   /** 发送流式完成（携带已持久化的消息列表） */
-  onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; runGeneration?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean }) => void
+  onComplete: (messages?: AgentMessage[], opts?: { stoppedByUser?: boolean; startedAt?: number; runGeneration?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean; final_answer?: AgentFinalAnswerInfo }) => void
   /** 发送标题更新 */
   onTitleUpdated: (title: string) => void
   /** 用户消息已持久化，外部入口可据此通知前端切到实时会话 */
@@ -952,7 +954,7 @@ export class AgentOrchestrator {
     }
     const completeRun = (
       messages?: AgentMessage[],
-      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[] },
+      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; final_answer?: AgentFinalAnswerInfo },
     ): void => {
       releaseActiveRun()
       callbacks.onComplete(messages, { ...opts, runGeneration })
@@ -960,7 +962,7 @@ export class AgentOrchestrator {
     const failRun = (
       error: string,
       messages?: AgentMessage[],
-      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[] },
+      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; final_answer?: AgentFinalAnswerInfo },
     ): void => {
       releaseActiveRun()
       callbacks.onError(error, { runGeneration })
@@ -1829,6 +1831,8 @@ export class AgentOrchestrator {
           let pendingNext: Promise<IteratorResult<SDKMessage>> | null = null
           // 捕获 result.subtype 以传递给前端（用于区分 success/error_max_turns/error_max_budget_usd）
           let capturedResultSubtype: string | undefined
+          let capturedFinalAnswer: AgentFinalAnswerInfo | undefined
+          const runAssistants: SDKMessage[] = []
           // 捕获 result.errors[] 错误详情：SDK 在 error_during_execution 等场景下会把真实错误原因
           // 放进 errors[]，透传到前端用于展示具体错误（而非泛泛的"任务执行过程中发生错误"）。
           let capturedResultErrors: string[] | undefined
@@ -1917,6 +1921,20 @@ export class AgentOrchestrator {
             // pi runtime 的流式 partial 消息不应计入可见消息数，故在此显式排除。
             if (!isPartialMessage && isVisibleRunMessage(msg)) {
               visibleRunMessageCount += 1
+            }
+            if (!isPartialMessage && msg.type === 'assistant' && !msg.isReplay) runAssistants.push(msg)
+            if (msg.type === 'result') {
+              const result = msg as SDKResultMessage
+              if (result.subtype === 'success' && !result.isSyntheticCompactionResult && !result.background_tasks?.some(task => task.status === 'running' || task.status === 'pending')) {
+                const inspected = inspectFinalAnswer(runAssistants)
+                result.final_answer = { ...inspected, recoveryAttempted: result.final_answer?.recoveryAttempted ?? false }
+                if (result.final_answer.status === 'missing') {
+                  result.subtype = 'error_during_execution'
+                  result.terminal_reason = 'missing_final_answer'
+                  result.errors = [MISSING_FINAL_ANSWER_MESSAGE]
+                }
+              }
+              capturedFinalAnswer = result.final_answer
             }
 
 
@@ -2196,8 +2214,11 @@ export class AgentOrchestrator {
             console.log(`[Agent 编排] Plan 模式：已注入计划确认建议`)
           }
 
-          // 发送完成信号
-          completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype, resultErrors: capturedResultErrors })
+          // 完成回调不等于业务成功；外部入口也必须收到执行期失败。
+          const completion = { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype, resultErrors: capturedResultErrors, final_answer: capturedFinalAnswer }
+          if (!wasStoppedByUser && capturedResultSubtype && capturedResultSubtype !== 'success') {
+            failRun(capturedResultErrors?.join('\n') || 'Agent 未正常完成', getAgentSessionMessages(sessionId), completion)
+          } else completeRun(getAgentSessionMessages(sessionId), completion)
 
           return
 

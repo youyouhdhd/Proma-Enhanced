@@ -2,7 +2,7 @@
 
 基于 [官方 Proma](https://github.com/proma-ai/Proma) 的增强 Fork，保留其本地优先的桌面 Agent 基础，并独立维护面向多项目、ChatGPT 连接和 Agent 使用体验的扩展。**自 v1.0.0 起，本仓库的版本号、安装包和更新来源均独立于上游。**
 
-[下载本 Fork 的最新版本](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.5 更新说明](./release-notes/v1.17.5.md) · [English](./README.en.md) · [Fork 维护与上游同步记录](./docs/fork-maintenance.md)
+[下载本 Fork 的最新版本](https://github.com/youyouhdhd/Proma-Enhanced/releases/latest) · [v1.17.6 更新说明](./release-notes/v1.17.6.md) · [English](./README.en.md) · [Fork 维护与上游同步记录](./docs/fork-maintenance.md)
 
 ## 这个 Fork 增加了什么
 
@@ -20,7 +20,7 @@
 
 
 
-v1.17.5 将本地问答、终端接管、权限确认与计划审批统一为等待回复，不再自动超时；界面明确显示等待策略，实际执行的故障超时仍保留。详见 [更新说明](./release-notes/v1.17.5.md)。
+v1.17.6 检查最终正文，缺失时最多一次无工具补答；仍无正文会明确提示并标记失败。修复 V4.1 推理参数、方舟思考回放和异常 SSE 检测，保留原生正文中的字面思考标签。详见 [更新说明](./release-notes/v1.17.6.md)。
 
 ## 上游 Proma 简介
 

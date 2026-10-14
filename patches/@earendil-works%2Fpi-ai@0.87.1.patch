@@ -1,7 +1,50 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index 5dd85f19db51b73dcd0c5c4cd8c28ad99e09ee6f..02775fa3082cfd4a3150c394838dd77b374a26d6 100644
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -323,7 +323,7 @@ async function* iterateAnthropicEvents(response, signal) {
+         }
+         catch (error) {
+             const message = error instanceof Error ? error.message : String(error);
+-            throw new Error(`Could not parse Anthropic SSE event ${sse.event}: ${message}; data=${sse.data}; raw=${sse.raw.join("\\n")}`);
++            throw new Error(`provider_stream_protocol_error: invalid_json`);
+         }
+     }
+     if (sawMessageStart && !sawMessageEnd) {
+@@ -398,7 +398,28 @@ export const stream = (model, context, options) => {
+             await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+             stream.push({ type: "start", partial: output });
+             const blocks = output.content;
++            const activeBlocks = new Map();
++            const diagnostic = { events: 0, blocks: 0, textChars: 0, thinkingChars: 0 };
++            const protocolError = (kind, rawIndex) => {
++                const index = Number.isSafeInteger(rawIndex) && rawIndex >= 0 ? rawIndex : undefined;
++                // 仅输出有界元数据，不输出内容、签名或认证头。
++                console.warn("[Pi 协议]", { kind, index, ...diagnostic });
++                throw new Error(`provider_stream_protocol_error: ${kind} index=${index ?? "none"}`);
++            };
+             for await (const event of iterateAnthropicEvents(response, options?.signal)) {
++                diagnostic.events++;
++                if (event.type === "content_block_start") {
++                    if (!Number.isInteger(event.index) || event.index < 0 || activeBlocks.has(event.index)) protocolError("invalid_block_start", event.index);
++                    activeBlocks.set(event.index, event.content_block.type);
++                    diagnostic.blocks++;
++                } else if (event.type === "content_block_delta") {
++                    const expected = { text_delta: "text", thinking_delta: "thinking", signature_delta: "thinking", input_json_delta: "tool_use" }[event.delta.type];
++                    if (!activeBlocks.has(event.index) || (expected && activeBlocks.get(event.index) !== expected)) protocolError("invalid_block_delta", event.index);
++                    diagnostic.textChars += typeof event.delta.text === "string" ? event.delta.text.length : 0;
++                    diagnostic.thinkingChars += typeof event.delta.thinking === "string" ? event.delta.thinking.length : 0;
++                } else if (event.type === "content_block_stop") {
++                    if (!activeBlocks.delete(event.index)) protocolError("invalid_block_stop", event.index);
++                } else if (event.type === "message_stop" && activeBlocks.size > 0) protocolError("unclosed_blocks", undefined);
+                 if (event.type === "message_start") {
+                     output.responseId = event.message.id;
+                     const transformations = event.message.input_transformations;
 diff --git a/dist/utils/retry.js b/dist/utils/retry.js
+index 6538c63c99f75a4f232ebd413adf80571a0f39b4..ae2d181d38a62b8cb55b8bd8931fe38647cde9ae 100644
 --- a/dist/utils/retry.js
 +++ b/dist/utils/retry.js
-@@ -63,9 +63,19 @@
+@@ -63,9 +63,19 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
      // "stream ended without ..." and "Anthropic stream ended before message_stop"
      // (#4433); Bedrock/Smithy can throw an HTTP/2 no-response error (#3594).
      "ended without",

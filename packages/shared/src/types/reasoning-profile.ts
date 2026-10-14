@@ -52,7 +52,7 @@ export interface ReasoningEncoding {
 }
 
 export interface ReasoningProfile {
-  id: 'deepseek-v4-flash' | 'deepseek-flash' | 'deepseek-v4-pro' | 'kimi-k3' | 'glm-5.2' | 'glm-5.3' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-astra' | 'openai-reasoning-sol-luna'
+  id: 'deepseek-v4-flash' | 'deepseek-v4.1-flash' | 'deepseek-flash' | 'deepseek-v4-pro' | 'kimi-k3' | 'glm-5.2' | 'glm-5.3' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-astra' | 'openai-reasoning-sol-luna'
   levels: readonly AgentThinkingLevel[]
   defaultLevel: AgentThinkingLevel
   normalize(level: AgentThinkingLevel | undefined): AgentThinkingLevel
@@ -244,6 +244,12 @@ const DEEPSEEK_V4_FLASH_PROFILE: ReasoningProfile = {
   },
 }
 
+const DEEPSEEK_V41_FLASH_PROFILE: ReasoningProfile = {
+  ...DEEPSEEK_V4_FLASH_PROFILE,
+  id: 'deepseek-v4.1-flash',
+  levels: ['off', 'low', 'high', 'max'],
+}
+
 const DEEPSEEK_FLASH_PROFILE: ReasoningProfile = {
   id: 'deepseek-flash',
   levels: DEEPSEEK_V4_LEVELS,
@@ -343,6 +349,7 @@ const OPENAI_SOL_LUNA_PROFILE: ReasoningProfile = {
 }
 
 export const REASONING_PROFILES: readonly ReasoningProfile[] = [
+  DEEPSEEK_V41_FLASH_PROFILE,
   DEEPSEEK_V4_FLASH_PROFILE,
   DEEPSEEK_FLASH_PROFILE,
   DEEPSEEK_V4_PRO_PROFILE,
@@ -369,7 +376,9 @@ export function resolveReasoningProfile(input: ResolveReasoningProfileInput): Re
   if (isGpt6SolFamily(modelId) || isGpt6LunaFamily(modelId)) {
     return OPENAI_SOL_LUNA_PROFILE.encodings[input.transport] ? OPENAI_SOL_LUNA_PROFILE : undefined
   }
-  const profile = /^deepseek-flash(?:-|$)/.test(modelId)
+  const profile = /^(?:deepseek-v4\.1-flash|deepseek-v4-1-flash)(?:-260910)?$/.test(modelId)
+    ? DEEPSEEK_V41_FLASH_PROFILE
+    : /^deepseek-flash(?:-|$)/.test(modelId)
     ? DEEPSEEK_FLASH_PROFILE
     : /^deepseek-v4-flash(?:-|$)/.test(modelId)
       ? DEEPSEEK_V4_FLASH_PROFILE

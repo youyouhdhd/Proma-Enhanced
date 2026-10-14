@@ -1,64 +1,33 @@
-import type { SDKContentBlock, SDKTextBlock } from '@proma/shared'
-
-const THINK_OPEN_TAG = '<think>'
-const THINK_CLOSE_TAG = '</think>'
-
-function appendTextBlock(blocks: SDKContentBlock[], text: string): void {
-  if (!text.trim()) return
-  blocks.push({ type: 'text', text })
+import type { SDKContentBlock, SDKTextBlock, SDKAssistantMessage } from '@proma/shared'
+export interface ThinkTagOptions {
+  contentFormat?: SDKAssistantMessage['message']['content_format']
+  isStreaming?: boolean
 }
-
-function appendThinkingBlock(blocks: SDKContentBlock[], thinking: string): void {
-  const content = thinking.trim()
-  if (!content) return
-  blocks.push({ type: 'thinking', thinking: content })
-}
-
-/**
- * 兼容部分模型把思考内容包在 <think> 标签里的返回格式。
- * 未闭合的 <think> 在流式阶段按思考块处理，等闭合标签到达后会自然拆出后续正文。
- */
-export function parseThinkTagsFromText(text: string): SDKContentBlock[] {
-  const lowerText = text.toLowerCase()
-  const blocks: SDKContentBlock[] = []
-  let cursor = 0
-
-  while (cursor < text.length) {
-    const openIndex = lowerText.indexOf(THINK_OPEN_TAG, cursor)
-    if (openIndex === -1) {
-      appendTextBlock(blocks, text.slice(cursor))
-      break
-    }
-
-    appendTextBlock(blocks, text.slice(cursor, openIndex))
-
-    const contentStart = openIndex + THINK_OPEN_TAG.length
-    const closeIndex = lowerText.indexOf(THINK_CLOSE_TAG, contentStart)
-    if (closeIndex === -1) {
-      appendThinkingBlock(blocks, text.slice(contentStart))
-      break
-    }
-
-    appendThinkingBlock(blocks, text.slice(contentStart, closeIndex))
-    cursor = closeIndex + THINK_CLOSE_TAG.length
+/** 只解释历史前导标签，代码、引用及正文中的字面标签保持原样。 */
+export function parseThinkTagsFromText(text: string, options: ThinkTagOptions = {}): SDKContentBlock[] {
+  if (options.contentFormat === 'structured' || !/^\s*<think>/i.test(text)) return [{ type: 'text', text }]
+  const match = /^\s*<think>([\s\S]*?)<\/think>([\s\S]*)$/i.exec(text)
+  if (!match) {
+    if (options.isStreaming) return [{ type: 'thinking', thinking: text.replace(/^\s*<think>/i, '') }]
+    return [{ type: 'text', text }]
   }
-
+  const blocks: SDKContentBlock[] = []
+  if (match[1]!.trim()) blocks.push({ type: 'thinking', thinking: match[1]!.trim() })
+  if (match[2]!.trim()) blocks.push({ type: 'text', text: match[2]! })
   return blocks
 }
-
-export function splitThinkTagsInTextBlock(block: SDKTextBlock): SDKContentBlock[] {
-  if (!block.text.toLowerCase().includes(THINK_OPEN_TAG)) return [block]
-  return parseThinkTagsFromText(block.text)
+export function splitThinkTagsInTextBlock(block: SDKTextBlock, options: ThinkTagOptions = {}): SDKContentBlock[] {
+  return parseThinkTagsFromText(block.text, options)
 }
-
-export function normalizeThinkTagsInContentBlocks(blocks: SDKContentBlock[]): SDKContentBlock[] {
+export function normalizeThinkTagsInContentBlocks(blocks: SDKContentBlock[], options: ThinkTagOptions = {}): SDKContentBlock[] {
+  if (options.contentFormat === 'structured' || blocks.some(b => b.type === 'thinking')) return blocks
   const normalized: SDKContentBlock[] = []
-  for (const block of blocks) {
-    if (block.type === 'text' && 'text' in block && typeof block.text === 'string') {
-      normalized.push(...splitThinkTagsInTextBlock(block as SDKTextBlock))
-    } else {
-      normalized.push(block)
-    }
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]!
+    if (block.type !== 'text') { normalized.push(block); continue }
+    let text = (block as SDKTextBlock).text
+    while (blocks[i + 1]?.type === 'text') text += (blocks[++i] as SDKTextBlock).text
+    normalized.push(...parseThinkTagsFromText(text, options))
   }
   return normalized
 }

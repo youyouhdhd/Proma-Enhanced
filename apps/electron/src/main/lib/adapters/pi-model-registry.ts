@@ -752,7 +752,7 @@ export async function resolvePiReasoningCapability(
   })
 }
 
-async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiModelDefaults> {
+export async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiModelDefaults> {
   const catalogModel = input.model ? await findPiCatalogModel(input.provider, input.model) : undefined
   const codexAlignedCapabilities = getCodexAlignedGPT5Capabilities(input.model)
   const api = resolvePiApi(input.provider, catalogModel?.api)
@@ -777,7 +777,10 @@ async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiMod
     thinkingLevelMap: providerSpecificCapabilities?.thinkingLevelMap
       ?? channelSpecificCapabilities?.thinkingLevelMap
       ?? catalogModel?.thinkingLevelMap,
-    compat: shouldForceAdaptiveThinking
+    compat: input.provider === 'ark-coding-plan' && api === 'anthropic-messages'
+      && resolveReasoningProfile({ modelId: input.model, transport: 'anthropic-messages' })?.id === 'deepseek-v4.1-flash'
+      ? { ...providerSpecificCapabilities?.compat, allowEmptySignature: true }
+      : shouldForceAdaptiveThinking
       ? { ...providerSpecificCapabilities?.compat, ...channelSpecificCapabilities?.compat, forceAdaptiveThinking: true }
       : (providerSpecificCapabilities?.compat ?? channelSpecificCapabilities?.compat),
     input: catalogModel ? [...catalogModel.input] : ['text', 'image'],

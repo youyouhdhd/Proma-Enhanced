@@ -9,6 +9,7 @@ import type {
   AgentExternalRunSource,
   AgentMessage,
   AgentSendInput,
+  AgentStreamCompletePayload,
 } from '@proma/shared'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 export interface HeadlessRunExtensions {
@@ -21,7 +22,7 @@ export interface HeadlessRunExtensions {
 
 export interface HeadlessAgentRunCallbacks {
   onError: (error: string) => void
-  onComplete: (messages?: AgentMessage[], outcome?: { stoppedByUser?: boolean }) => void
+  onComplete: (messages?: AgentMessage[], outcome?: Pick<AgentStreamCompletePayload, 'stoppedByUser' | 'resultSubtype' | 'resultErrors' | 'final_answer'>) => void
   onTitleUpdated: (title: string) => void
   source?: AgentExternalRunSource
   /** 发起此次 headless 运行的可见会话，用于将事件路由回其 renderer。 */

@@ -17,6 +17,7 @@ import {
   type RunModelSnapshot,
 } from '@proma/shared'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tags'
+import { getTurnFinalAnswer, MISSING_FINAL_ANSWER_MESSAGE } from './final-answer'
 
 // ===== 辅助：从 SDKMessage 提取元数据 =====
 
@@ -307,11 +308,11 @@ export function getGroupPreview(group: MessageGroup): string {
   for (const aMsg of group.assistantMessages) {
     const rawBlocks = aMsg.message?.content
     if (!Array.isArray(rawBlocks)) continue
-    for (const block of normalizeThinkTagsInContentBlocks(rawBlocks)) {
+    for (const block of normalizeThinkTagsInContentBlocks(rawBlocks, { contentFormat: aMsg.message.content_format })) {
       if (block.type === 'text' && 'text' in block) {
         texts.push((block as { text: string }).text)
       }
     }
   }
-  return texts.join(' ').slice(0, 200)
+  return getTurnFinalAnswer(group.turnMessages).status === 'missing' ? MISSING_FINAL_ANSWER_MESSAGE : texts.join(' ').slice(0, 200)
 }

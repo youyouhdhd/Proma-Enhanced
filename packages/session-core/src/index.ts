@@ -35,6 +35,9 @@ export {
   splitThinkTagsInTextBlock,
 } from './thinking-tags'
 
+// 最终正文状态
+export { inspectFinalAnswer, getTurnFinalAnswer, MISSING_FINAL_ANSWER_MESSAGE } from './final-answer'
+
 // 转录（稳定下标 + assistant 多快照去重 + 工具摘要折叠）
 export {
   toTranscript,

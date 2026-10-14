@@ -344,7 +344,7 @@ export class SlackBridge {
     if (payload.kind === 'proma_event' && payload.event.type === 'run_completed') {
       const homeRun = this.homeRuns.get(sessionId)
       this.homeRuns.delete(sessionId)
-      if (homeRun) void this.postHomeNotification(homeRun, payload.event.stoppedByUser)
+      if (homeRun) void this.postHomeNotification(homeRun, payload.event.stoppedByUser, payload.event.resultSubtype)
       return
     }
     if (payload.kind === 'sdk_message') {
@@ -713,14 +713,16 @@ export class SlackBridge {
     }
   }
 
-  private async postHomeNotification(run: HomeRun, stoppedByUser: boolean): Promise<void> {
+  private async postHomeNotification(run: HomeRun, stoppedByUser: boolean, resultSubtype?: string): Promise<void> {
     const client = this.client
     const channel = this.botConfig.homeChannelId
     if (!client || !channel) return
     // Home Channel is a status surface, not an export of private session content.
     const summary = stoppedByUser
       ? `Proma 桌面会话已停止：${run.title}`
-      : `Proma 桌面会话已完成：${run.title}`
+      : resultSubtype && resultSubtype !== 'success'
+        ? `Proma 桌面会话执行失败：${run.title}`
+        : `Proma 桌面会话已完成：${run.title}`
     const rendered = renderSlackMessage(summary)
     try {
       await client.chat.postMessage({ channel, text: rendered.text, blocks: rendered.blocks as never })

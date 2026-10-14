@@ -22,6 +22,8 @@ import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
 import { ProcessBlockGroup, buildAssistantTurnRenderItems } from './ProcessBlockGroup'
 import { extractToolResultText, TASK_TOOL_NAMES } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
+import { getTurnFinalAnswer } from '@proma/session-core'
+import { FinalAnswerNotice } from './FinalAnswerNotice'
 // 会话转录的纯逻辑(Turn 分组 / 快照去重 / 预览)已下沉到 @proma/session-core 作为唯一真源。
 // 这里 import 供本文件内部使用，并 re-export 以保持既有 `from './SDKMessageRenderer'` 导入方零改动。
 import {
@@ -343,10 +345,8 @@ export function buildTaskProgressDataForTurn(turn: AssistantTurn): { taskActivit
   for (const message of turn.assistantMessages) {
     const blocks = message.message?.content
     if (!Array.isArray(blocks)) continue
-    for (const block of blocks) {
-      for (const normalizedBlock of normalizeThinkTagsInContentBlocks([block])) {
-        enrichedBlocks.push({ block: normalizedBlock, parentToolUseId: message.parent_tool_use_id })
-      }
+    for (const normalizedBlock of normalizeThinkTagsInContentBlocks(blocks, { contentFormat: message.message.content_format })) {
+      enrichedBlocks.push({ block: normalizedBlock, parentToolUseId: message.parent_tool_use_id })
     }
   }
 
@@ -422,10 +422,8 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
     }
     const blocks = aMsg.message?.content
     if (Array.isArray(blocks)) {
-      for (const block of blocks) {
-        for (const normalizedBlock of normalizeThinkTagsInContentBlocks([block])) {
-          enrichedBlocks.push({ block: normalizedBlock, parentToolUseId: aMsg.parent_tool_use_id })
-        }
+      for (const normalizedBlock of normalizeThinkTagsInContentBlocks(blocks, { contentFormat: aMsg.message.content_format, isStreaming })) {
+        enrichedBlocks.push({ block: normalizedBlock, parentToolUseId: aMsg.parent_tool_use_id })
       }
     }
   }
@@ -493,7 +491,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
   }
 
   // 如果没有任何内容
-  if (enrichedBlocks.length === 0 && !hasError) return null
+  if (enrichedBlocks.length === 0 && !hasError && getTurnFinalAnswer(turn.turnMessages).status !== 'missing') return null
 
   const renderTopLevelBlock = (block: SDKContentBlock, i: number): React.ReactNode => {
     // 任务进度由底部浮层统一呈现，输出记录不再重复显示任务卡。
@@ -536,6 +534,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
       <MessageContent>
         <TurnFileMapProvider map={turnFileMap}>
         <div className={cn('space-y-2')}>
+          {isStreaming && <FinalAnswerNotice messages={turn.turnMessages} isStreaming />}
           {renderItems.map((item, itemIndex) => {
             if (item.type === 'block') {
               return renderTopLevelBlock(item.item.block, item.item.index)
@@ -558,6 +557,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
               />
             )
           })}
+          {!isStreaming && <FinalAnswerNotice messages={turn.turnMessages} stoppedByUser={stoppedByUser} hasError={hasError} />}
         </div>
         {/* 如果有错误但也有内容块，在末尾以 tail 形式挂错误横幅附错误提示 + 重试按钮，保留正文本身的 markdown 排版 */}
         {hasError && errorContent && topLevelBlocks.length > 0 && (
@@ -672,7 +672,7 @@ export function SDKMessageRenderer({
       if (aMsg.error) return <ErrorMessage message={aMsg} />
       return null
     }
-    const blocks = normalizeThinkTagsInContentBlocks(rawBlocks)
+    const blocks = normalizeThinkTagsInContentBlocks(rawBlocks, { contentFormat: aMsg.message.content_format })
     if (blocks.length === 0) {
       if (aMsg.error) return <ErrorMessage message={aMsg} />
       return null
